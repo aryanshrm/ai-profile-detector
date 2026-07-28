@@ -1,1 +1,0 @@
-C:\Users\infinix\ai-profile-detector\venv\Scripts\python.exe: can't open file 'C:\\Users\\infinix\\ai-profile-detector\\train.py': [Errno 2] No such file or directory

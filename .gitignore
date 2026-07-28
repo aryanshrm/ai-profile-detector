@@ -1,0 +1,15 @@
+# Python cache and local virtual environment
+__pycache__/
+*.py[cod]
+venv/
+
+# Local training artifacts and logs (kept on disk, not in GitHub)
+*.safetensors
+*.pt
+*.pth
+*.bin
+fine_tuned_vit/checkpoint-*/
+fine_tuned_vit_backup_before_feedback/
+fine_tuned_vit_candidate/
+*_train.log
+*_train.err.log

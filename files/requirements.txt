@@ -1,0 +1,21 @@
+# ── Core ──────────────────────────────────────────────────────────────────────
+streamlit>=1.35.0
+Pillow>=10.0.0
+requests>=2.31.0
+numpy>=1.26.0
+
+# ── HuggingFace stack ─────────────────────────────────────────────────────────
+transformers>=4.40.0
+torch>=2.2.0
+torchvision>=0.17.0
+
+# ── Day 2: Fine-tuning additions ──────────────────────────────────────────────
+datasets>=2.19.0          # HF datasets (used internally by Trainer)
+accelerate>=0.30.0        # required by Trainer for device placement + FP16
+evaluate>=0.4.0           # accuracy metric used in compute_metrics()
+
+# ── MediaPipe face detection ──────────────────────────────────────────────────
+mediapipe>=0.10.0
+
+# ── Plotting (training curves) ────────────────────────────────────────────────
+matplotlib>=3.8.0
