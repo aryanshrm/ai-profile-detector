@@ -95,9 +95,15 @@ def engine_neural_ensemble(image: Image.Image) -> dict:
             continue
 
     if not results:
+        # An unavailable model is not evidence for either class.  Mark the
+        # engine inactive so the consensus code can exclude it instead of
+        # silently treating a made-up 50% value as a real model prediction.
         return {
-            "score": 50, "max": 100, "raw": 0.5,
-            "explanation": "Neural classifiers unavailable. Score defaulted to 50% (uncertain).",
+            "score": 0,
+            "max": 100,
+            "raw": 0.0,
+            "active": False,
+            "explanation": "Neural classifiers unavailable; excluded from the final consensus.",
         }
 
     avg = float(np.mean(results))
@@ -120,7 +126,13 @@ def engine_neural_ensemble(image: Image.Image) -> dict:
     else:
         text = f"Neural classifiers report authentic — {avg*100:.0f}% AI probability.<br><b>Models:</b> {details}{caveat}"
 
-    return {"score": round(score_100, 1), "max": 100, "raw": avg, "explanation": text}
+    return {
+        "score": round(score_100, 1),
+        "max": 100,
+        "raw": avg,
+        "active": True,
+        "explanation": text,
+    }
 
 
 # ═════════════════════════════════════════════════════
@@ -986,44 +998,63 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Normalize every engine to a 0-100 AI-risk percentage.  The final result
-    # uses all of those percentages, rather than merely counting high-risk
-    # badges.  A successfully trained local ViT is given greater influence
-    # because it learns from confirmed examples, while the other engines remain
-    # part of the final forensic consensus.
-    total_engine_count = len(engines_dict)
+    # Normalize each available engine to a 0-100 AI-likelihood percentage.
+    # Inactive engines must not vote: the previous implementation included the
+    # missing fine-tuned ViT as a zero, which biased every result toward
+    # "AUTHENTIC".  A trained local ViT keeps its extra weight because it is the
+    # only project-specific supervised classifier.
     weighted_engine_scores = []
     for engine_key, engine in engines_dict.items():
-        if engine["max"] <= 0:
+        if engine.get("active", True) is False or engine.get("max", 0) <= 0:
             continue
-        ai_percentage = engine["score"] / engine["max"] * 100
-        weight = 4.0 if engine_key == "fine_tuned_vit" and engine.get("active") else 1.0
-        weighted_engine_scores.append((ai_percentage, weight))
 
-    engine_ai_percentages = [score for score, _weight in weighted_engine_scores]
-    high_risk_engine_count = sum(percent > 60 for percent in engine_ai_percentages)
-    human_engine_count = total_engine_count - high_risk_engine_count
+        ai_percentage = float(engine["score"]) / float(engine["max"]) * 100.0
+        ai_percentage = float(np.clip(ai_percentage, 0.0, 100.0))
+        weight = 4.0 if engine_key == "fine_tuned_vit" else 1.0
+        weighted_engine_scores.append((engine_key, ai_percentage, weight))
 
-    total_weight = sum(weight for _score, weight in weighted_engine_scores)
-    ai_conf = sum(score * weight for score, weight in weighted_engine_scores) / (total_weight * 100)
-    human_conf = 1.0 - ai_conf
-
-    if human_conf > ai_conf:
-        verdict       = "AUTHENTIC"
-        verdict_label = "✅ AUTHENTIC"
+    if weighted_engine_scores:
+        total_weight = sum(weight for _key, _score, weight in weighted_engine_scores)
+        ai_percentage = sum(
+            score * weight for _key, score, weight in weighted_engine_scores
+        ) / total_weight
     else:
-        verdict       = "AI-GENERATED"
-        verdict_label = "🚨 AI-GENERATED"
+        # No available signal should produce an uncertain result, never a
+        # confident authentic/AI claim.
+        ai_percentage = 50.0
 
+    active_engine_count = len(weighted_engine_scores)
+    unavailable_engine_count = len(engines_dict) - active_engine_count
+    engine_ai_percentages = [score for _key, score, _weight in weighted_engine_scores]
+    high_risk_engine_count = sum(percent >= 62.0 for percent in engine_ai_percentages)
+    human_engine_count = sum(percent <= 40.0 for percent in engine_ai_percentages)
+    uncertain_engine_count = active_engine_count - high_risk_engine_count - human_engine_count
+
+    # Use an uncertainty band rather than turning a 50.0/49.9 split into a
+    # definitive claim.  The UI and legacy adapter already support UNCERTAIN.
+    if ai_percentage >= 62.0:
+        verdict = "AI-GENERATED"
+        verdict_label = "🚨 LIKELY AI-GENERATED"
+    elif ai_percentage <= 40.0:
+        verdict = "AUTHENTIC"
+        verdict_label = "✅ LIKELY CAMERA-ORIGIN"
+    else:
+        verdict = "UNCERTAIN"
+        verdict_label = "⚠️ UNCERTAIN"
+
+    human_percentage = 100.0 - ai_percentage
     return {
-        "verdict":          verdict,
-        "verdict_label":    verdict_label,
-        "confidence_score": round(ai_conf * 100, 1),   # Average AI risk across engines
-        "human_score":      round(human_conf * 100, 1), # Average Human confidence across engines
-        "total_engine_count": total_engine_count,
+        "verdict": verdict,
+        "verdict_label": verdict_label,
+        "confidence_score": round(ai_percentage, 1),
+        "human_score": round(human_percentage, 1),
+        "total_engine_count": active_engine_count,
+        "available_engine_count": active_engine_count,
+        "unavailable_engine_count": unavailable_engine_count,
         "high_risk_engine_count": high_risk_engine_count,
-        "human_engine_count":     human_engine_count,
-        "engines":          engines_dict,
+        "human_engine_count": human_engine_count,
+        "uncertain_engine_count": uncertain_engine_count,
+        "engines": engines_dict,
     }
 
 
