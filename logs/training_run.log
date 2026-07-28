@@ -1,0 +1,29 @@
+[train] Device : cpu  |  FP16 : False
+[train] Base   : google/vit-base-patch16-224
+[train] Output : ./fine_tuned_vit
+[train] AI images   : 104
+[train] Real images : 102
+[train] Train samples : 166
+[train] Val samples   : 40
+[train] Starting fine-tuning …
+{'loss': '0.2776', 'grad_norm': '1.993', 'learning_rate': '4.984e-05', 'epoch': '0.4762'}
+{'loss': '0.09996', 'grad_norm': '0.1492', 'learning_rate': '4.455e-05', 'epoch': '0.9524'}
+{'eval_loss': '0.02768', 'eval_accuracy': '1', 'eval_runtime': '7.588', 'eval_samples_per_second': '5.271', 'eval_steps_per_second': '0.659', 'epoch': '1'}
+{'loss': '0.0318', 'grad_norm': '0.02451', 'learning_rate': '3.326e-05', 'epoch': '1.429'}
+{'loss': '0.006916', 'grad_norm': '0.02776', 'learning_rate': '1.944e-05', 'epoch': '1.905'}
+{'eval_loss': '0.01494', 'eval_accuracy': '1', 'eval_runtime': '7.781', 'eval_samples_per_second': '5.141', 'eval_steps_per_second': '0.643', 'epoch': '2'}
+{'loss': '0.003685', 'grad_norm': '0.01266', 'learning_rate': '7.322e-06', 'epoch': '2.381'}
+{'loss': '0.0009003', 'grad_norm': '0.007982', 'learning_rate': '6.268e-07', 'epoch': '2.857'}
+{'eval_loss': '0.01582', 'eval_accuracy': '1', 'eval_runtime': '8.604', 'eval_samples_per_second': '4.649', 'eval_steps_per_second': '0.581', 'epoch': '3'}
+{'train_runtime': '341.2', 'train_samples_per_second': '1.459', 'train_steps_per_second': '0.185', 'train_loss': '0.06681', 'epoch': '3'}
+[train] Training complete.
+[train] Model saved -> ./fine_tuned_vit
+[train] Running final evaluation ...
+
+=============================================
+  Final Val Accuracy : 100.00%
+  Final Val Loss     : 0.0155
+=============================================
+
+[train] Eval results saved -> ./fine_tuned_vit\eval_results.json
+[train] Training curves saved -> ./fine_tuned_vit\training_curves.png

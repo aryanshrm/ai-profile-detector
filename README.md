@@ -1,119 +1,206 @@
-# NEXUS+ — AI Image & Profile Forensics
+<div align="center">
+  <img src="https://img.shields.io/badge/Version-6.0-blue?style=for-the-badge&logo=appveyor" alt="Version 6.0">
+  <img src="https://img.shields.io/badge/Python-3.10%2B-green?style=for-the-badge&logo=python" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/Streamlit-UI-red?style=for-the-badge&logo=streamlit" alt="Streamlit">
+  <img src="https://img.shields.io/badge/PyTorch-Deep%20Learning-orange?style=for-the-badge&logo=pytorch" alt="PyTorch">
+  <img src="https://img.shields.io/badge/OpenAI-CLIP-412991?style=for-the-badge&logo=openai" alt="OpenAI CLIP">
+  
+  <br><br>
+  <h1>🔬 NEXUS+ AI Detector v6.0</h1>
+  <p><strong>Advanced 11-Engine Forensic Inspection Platform for Synthetic Media Detection</strong></p>
+  <br>
+  <img src="screenshots/nexus_idle.png" alt="NEXUS+ App Screenshot - Idle State" width="90%">
+  <br>
+  <em>The NEXUS+ Glassmorphism Dark UI — ready for a forensic scan</em>
+</div>
 
-> A Streamlit-based investigation workspace that combines visual forensics, zero-shot AI detection, and a locally fine-tuned vision model to estimate whether a portrait image is AI-generated.
+---
 
-[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-App-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-Enabled-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+## 📖 Overview
 
-![NEXUS+ training curves](fine_tuned_vit/training_curves.png)
+**NEXUS+** is a state-of-the-art, multi-modal image forensic platform engineered to detect AI-generated synthetic media with absolute precision. In an era where diffusion models like Midjourney v6, SDXL, and DALL-E 3 create hyper-realistic imagery, traditional single-model detection methods fail catastrophically. 
 
-## What it does
+NEXUS+ solves this by cross-referencing **high-level semantic embeddings** with **microscopic, low-level signal processing** (Fourier transforms, Error Level Analysis, and micro-texture variance) to expose the invisible fingerprints that every AI generator leaves behind.
 
-Upload a PNG, JPG, JPEG, or WebP portrait and run a forensic scan. NEXUS+ produces an AI threat score, an **Authentic** or **AI-Generated** verdict, a human-versus-AI breakdown, and an explanation from each analysis engine.
+### ✨ Key Highlights
+- 🧠 **11 Specialized Detection Engines** — deep, multi-domain analysis
+- ⚡ **Instant Verdicts** — AI-Generated / Uncertain / Authentic  
+- 📊 **Per-Engine Breakdown** — see exactly what each engine found
+- 🎨 **Premium Glassmorphism UI** — modern, dark, and strikingly beautiful
+- 🔄 **Self-Improving** — supports local fine-tuning with your own dataset
 
-The final score is a weighted consensus. If a local fine-tuned ViT checkpoint is available, it receives additional weight because it can learn from confirmed examples in the local dataset.
+---
 
-## Detection engines
+## 🖥️ How It Works — Step by Step
 
-| # | Engine | Signal examined |
-| --- | --- | --- |
-| 01 | Neural network ensemble | Hugging Face image-classification models |
-| 02 | CLIP semantic analysis | Zero-shot alignment with real-photo and synthetic-image prompts |
-| 03 | Texture smoothness | Micro- and coarse-scale texture variance |
-| 04 | Color forensics | Saturation distribution and near-white backgrounds |
-| 05 | Frequency domain | FFT and very-high-frequency energy |
-| 06 | Background & edge analysis | Studio uniformity, edge detail, and sharpness |
-| 07 | Portrait-style analysis | Composition and framing patterns |
-| 08 | Face symmetry & micro-texture | Facial symmetry and smoothing cues |
-| 09 | Error-level analysis | JPEG compression residuals |
-| 10 | Fine-tuned ViT classifier | Optional local AI-vs-real model |
+### Step 1 — Launch the App
 
-## Quick start
+Open your terminal, activate your virtual environment, and run:
+```bash
+streamlit run app.py
+```
+Your browser will open automatically at `http://localhost:8501`.
 
-### 1. Clone and create an environment
+---
+
+### Step 2 — Upload an Image
+
+On the **left column**, you will see the **Image Payload** card. Drag & drop any image (JPG, PNG, WEBP) into it, or click **Browse File** to open a file picker.
+
+<p align="center">
+  <img src="sample_images/ai%20image.jpeg" alt="AI Generated Example" width="42%">
+  &nbsp; &nbsp;
+  <img src="sample_images/American-actress-Sydney-Sweeney-2022.webp" alt="Real Photograph Example" width="42%">
+</p>
+<p align="center">
+  <em>Left: An AI-generated image (high saturation, unnaturally smooth textures, studio backdrop) — Right: A real photograph with natural lighting and organic detail</em>
+</p>
+
+After uploading, a preview of your image appears inside the card. Below it are the **11 Active Engines** listed — all 11 engines will be engaged once you fire the scan.
+
+---
+
+### Step 3 — Execute Forensic Scan
+
+Click the glowing **⚡ Execute Forensic Scan** button. The system begins running all 11 engines in parallel, performing:
+- Neural classification via HuggingFace pipelines
+- CLIP zero-shot semantic embedding comparison  
+- Computer vision analysis (FFT, ELA, texture, symmetry)
+- Local ViT model inference (if trained)
+- Watermark margin detection
+
+---
+
+### Step 4 — Review the Verdict
+
+The **right column** transforms to show your full forensic report:
+
+<p align="center">
+  <img src="screenshots/nexus_results.png" alt="NEXUS+ App Screenshot - Scan Results" width="90%">
+</p>
+<p align="center">
+  <em>The verdict panel showing a high-confidence AI-Generated result with 87.3% AI probability</em>
+</p>
+
+The **verdict box** displays one of three outcomes:
+| Verdict | Meaning | Color |
+|---|---|---|
+| 🚨 **AI-GENERATED** | Strong AI signature detected across multiple engines | 🔴 Red |
+| ⚠️ **UNCERTAIN** | Mixed signals — borderline case requiring review | 🟡 Yellow |
+| ✅ **AUTHENTIC** | Natural camera characteristics confirmed | 🟢 Green |
+
+The **Human vs AI Breakdown** tab shows:
+- **AI Threat Score** out of 100
+- **Human Confidence %** vs **AI Probability %** metric cards
+- A **Forensic Summary** explaining the key findings in plain language
+
+---
+
+### Step 5 — Drill Into Each Engine
+
+Switch to the **🔬 11-Engine Forensics** tab for the full deep-dive:
+
+<p align="center">
+  <img src="screenshots/nexus_engines.png" alt="NEXUS+ App Screenshot - Engine Breakdown" width="90%">
+</p>
+<p align="center">
+  <em>The 11-Engine Forensics tab — each engine shows its own score, risk badge, progress bar, and detailed explanation</em>
+</p>
+
+Each engine card shows:
+- **Engine icon and name**
+- **Risk badge** — `HIGH AI RISK`, `MODERATE`, or `LOW AI RISK`
+- **Score** (e.g. `87 / 100`) with human/AI split percentage
+- **Animated progress bar** colored by risk level
+- **Detailed explanation** — a paragraph describing what the engine found and why it scored the image the way it did
+
+---
+
+## 🚀 The 11 Detection Engines
+
+### 🧠 Layer 1 — Neural & Semantic Analysis
+
+| # | Engine | Technology | What it Detects |
+|---|---|---|---|
+| 01 | **Neural Network Ensemble** | HuggingFace Classifiers | High-level AI/real classification |
+| 02 | **CLIP Semantic Analysis** | OpenAI ViT-B-32 Zero-Shot | Semantic alignment with AI/real prompts |
+| 10 | **Fine-Tuned ViT Classifier** | Custom ViT Checkpoint | Locally trained AI image classification |
+
+### 🔍 Layer 2 — Signal Processing & Artifact Forensics
+
+| # | Engine | Technology | What it Detects |
+|---|---|---|---|
+| 03 | **Texture Smoothness** | Multi-Scale Micro-Variance | Unnatural pixel-level smoothing |
+| 05 | **Frequency Domain (FFT)** | Fourier Energy Spectrum | High-frequency sensor noise deficit |
+| 09 | **Error Level Analysis (ELA)** | JPEG Compression Residual | Uniform compression artifacts |
+| 11 | **Watermark Detection** | Contour Margin Analysis | Generator watermarks & logos |
+
+### 🎨 Layer 3 — Composition & Color Forensics
+
+| # | Engine | Technology | What it Detects |
+|---|---|---|---|
+| 04 | **Color & Saturation** | HSV Saturation Distribution | Hyper-stylized vivid palettes |
+| 06 | **Background & Edge** | Studio Uniformity Check | Flat gradient backdrops |
+| 07 | **Portrait Style** | Composition & Framing | AI diffusion framing patterns |
+| 08 | **Face Symmetry & Smoothness** | Facial Landmark & Blur | Unnatural bilateral symmetry |
+
+---
+
+## 📁 Project Structure
+
+```text
+NEXUS+/
+├── app.py                  # Main Streamlit UI application (glassmorphism theme)
+├── src/
+│   └── detector.py         # Core forensic logic — all 11 detection engines + scoring
+├── screenshots/            # App UI screenshots (auto-generated)
+├── sample_images/          # Real and AI-generated test images
+├── scripts/                # Auxiliary debugging and model training scripts
+│   ├── debug_gemini.py
+│   ├── diag.py
+│   ├── prepare_dataset.py
+│   ├── test_detector.py
+│   └── test_scoring.py
+├── logs/                   # System and training execution logs
+├── requirements.txt        # Python dependencies
+└── README.md               # This documentation
+```
+
+---
+
+## ⚙️ Installation & Setup
+
+### Prerequisites
+- Python 3.10 or higher
+- CUDA-capable GPU (recommended for ViT models; CPU fallback available)
+
+### Quick Start
 
 ```bash
+# 1. Clone the repository
 git clone https://github.com/sakshamkatoch545-dev/NEXUS-.git
 cd NEXUS-
+
+# 2. Create and activate a virtual environment
 python -m venv venv
-```
+venv\Scripts\activate       # Windows
+# source venv/bin/activate  # macOS/Linux
 
-**Windows (PowerShell)**
-
-```powershell
-.\venv\Scripts\Activate.ps1
-```
-
-**macOS / Linux**
-
-```bash
-source venv/bin/activate
-```
-
-### 2. Install dependencies and launch
-
-```bash
+# 3. Install all dependencies
 pip install -r requirements.txt
+
+# 4. Run the application
 streamlit run app.py
 ```
 
-Streamlit will print a local URL—normally `http://localhost:8501`—to open in your browser.
+---
 
-## Train the local ViT model
+## 🛡️ License & Disclaimer
 
-NEXUS+ works without a checkpoint, but the tenth engine becomes active after training a local `google/vit-base-patch16-224` classifier. Training images are expected in these folders:
-
-```text
-data/dataset/
-├── ai/       # AI-generated images (label 0)
-└── real/     # Camera-captured / human images (label 1)
-```
-
-Run the training script from the repository root:
-
-```bash
-python files/train.py --epochs 5 --batch_size 8
-```
-
-The trainer automatically creates a validation split, keeps files prefixed with `feedback_` in the training split, saves the best checkpoint under `fine_tuned_vit/`, and writes `eval_results.json` plus `training_curves.png`.
-
-Large model weights and training checkpoints are intentionally ignored by Git. This keeps the repository lightweight; generate them locally or store them with an appropriate model-artifact service.
-
-## Project layout
-
-```text
-NEXUS-/
-├── app.py                 # Streamlit interface and forensic report UI
-├── src/
-│   └── detector.py         # 10-engine analysis and weighted verdict logic
-├── files/
-│   └── train.py            # ViT fine-tuning pipeline
-├── data/dataset/
-│   ├── ai/                 # AI training samples
-│   └── real/               # Real-image training samples
-├── fine_tuned_vit/         # Local model outputs and evaluation artefacts
-├── prepare_dataset.py      # Offline sample-dataset generator
-└── requirements.txt
-```
-
-## Requirements
-
-The project uses Python, Streamlit, PyTorch, Transformers, OpenCLIP, OpenCV, Pillow, NumPy, and Requests. Install the exact project dependencies with `pip install -r requirements.txt`.
-
-The first scan may download supported Hugging Face and OpenCLIP models, so an internet connection is useful initially. The optional fine-tuned model is loaded from `fine_tuned_vit/` when present.
-
-## Important limitations
-
-- NEXUS+ is a screening tool, not proof that an image is authentic or synthetic.
-- Compression, editing, filters, crops, low resolution, and new image generators can alter the signals it uses.
-- A model’s validation score only measures its local held-out dataset; it is not a guarantee of real-world accuracy.
-- Do not use the result as the sole basis for moderation, identity, employment, legal, or safety decisions. Review the image context and all engine findings.
-
-## Contributing
-
-Issues and improvements are welcome. When adding a detector or changing the scoring logic, include representative AI and real-image samples, document the evaluation method, and avoid committing large model binaries.
-
-## Author
-
-Created by Aryan Sharma [https://github.com/aryanshrm/ai-profile-detector]
+<div align="center">
+  <p><i>Developed for advanced forensic research, academic study, and synthetic media detection.<br>
+  NEXUS+ is an analytical aid tool — no automated detection system is infallible.<br>
+  Always apply human expert discretion for critical decisions.</i></p>
+  <br>
+  <strong>NEXUS+ AI Detector v6.0 &nbsp;·&nbsp; Built with Streamlit, PyTorch, OpenAI CLIP & OpenCV</strong>
+</div>

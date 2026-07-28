@@ -13,5 +13,4 @@ fine_tuned_vit_backup_before_feedback/
 fine_tuned_vit_candidate/
 *_train.log
 *_train.err.log
-
-.venv/
+.runtime_packages/
