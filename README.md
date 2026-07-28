@@ -116,4 +116,4 @@ Issues and improvements are welcome. When adding a detector or changing the scor
 
 ## Author
 
-Created by [@sakshamkatoch545-dev](https://github.com/sakshamkatoch545-dev).
+Created by Aryan Sharma [https://github.com/aryanshrm/ai-profile-detector]
