@@ -905,7 +905,7 @@ with col_in:
         if file_size_mb > MAX_UPLOAD_MB:
             st.warning(f"Large upload detected ({file_size_mb:.1f} MB). It will be resized for faster hosted analysis.")
         image = prepare_image(uploaded)
-        st.image(image, width="stretch", caption=f"Prepared image: {image.width}×{image.height}px")
+        st.image(image, use_column_width=True, caption=f"Prepared image: {image.width}×{image.height}px")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
