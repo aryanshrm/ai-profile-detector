@@ -837,7 +837,7 @@ st.markdown(f"""
     <div class="hero-kicker">🔬 Portfolio-ready ML demo · {APP_VERSION}</div>
     <div class="hero-title">NEXUS+ <span>AI Image Forensics</span></div>
     <div class="hero-copy">
-      Upload a profile image and run an 11-engine forensic scan that combines neural classifiers,
+      Upload a profile image and run an 12-engine forensic scan that combines neural classifiers,
       CLIP semantics, frequency analysis, ELA, texture checks, face symmetry, and watermark detection.
       Built as a polished Streamlit project ready for a live portfolio link.
     </div>
@@ -846,7 +846,7 @@ st.markdown(f"""
       <span class="hero-badge">PYTORCH</span>
       <span class="hero-badge">OPENAI CLIP</span>
       <span class="hero-badge">OPENCV</span>
-      <span class="hero-badge">11 ENGINES</span>
+      <span class="hero-badge">12 ENGINES</span>
     </div>
   </div>
   <div class="hero-stat-grid">
@@ -867,7 +867,7 @@ with st.sidebar:
     st.markdown("""
     **How to present this project:**
     - AI image forensics dashboard
-    - 11-engine explainable scoring
+    - 12-engine explainable scoring
     - Streamlit + PyTorch + OpenCV
     - Downloadable scan report
     """)
@@ -920,17 +920,18 @@ with col_in:
     )
 
     engines_info = [
-        ("01", "Neural Network Ensemble", "HuggingFace Classifiers"),
-        ("02", "CLIP Semantic Analysis", "OpenAI Zero-Shot"),
-        ("03", "Texture Smoothness", "Multi-Scale Micro-Variance"),
-        ("04", "Color & Saturation", "Saturation Distribution"),
-        ("05", "Frequency Domain FFT", "Fourier Energy Spectrum"),
-        ("06", "Background & Edge", "Studio Uniformity"),
-        ("07", "Portrait Style", "Composition & Framing"),
-        ("08", "Face Symmetry & Smoothness", "Facial Landmark & Blur"),
-        ("09", "Error Level Analysis (ELA)", "JPEG Compression Residual"),
-        ("10", "Fine-Tuned ViT Classifier", "Local Dataset Trained Model"),
-        ("11", "Watermark Detection", "Margin Text & Logo Search"),
+        ("01", "Primary AI-vs-Human Detector", "Trained HuggingFace Classifier"),
+        ("02", "Neural Network Ensemble", "Secondary Classifiers"),
+        ("03", "CLIP Semantic Analysis", "OpenAI Zero-Shot"),
+        ("04", "Texture Smoothness", "Multi-Scale Micro-Variance"),
+        ("05", "Color & Saturation", "Saturation Distribution"),
+        ("06", "Frequency Domain FFT", "Fourier Energy Spectrum"),
+        ("07", "Background & Edge", "Studio Uniformity"),
+        ("08", "Portrait Style", "Composition & Framing"),
+        ("09", "Face Symmetry & Smoothness", "Facial Landmark & Blur"),
+        ("10", "Error Level Analysis (ELA)", "JPEG Compression Residual"),
+        ("11", "Fine-Tuned ViT Classifier", "Local Dataset Trained Model"),
+        ("12", "Watermark Detection", "Margin Text & Logo Search"),
     ]
 
     for num, name, sub in engines_info:
@@ -1023,7 +1024,7 @@ with col_out:
         # ── TABS ──
         tab_human_ai, tab_engines = st.tabs([
             "⚡  Human vs AI Breakdown",
-            "🔬  11-Engine Forensics",
+            "🔬  12-Engine Forensics",
         ])
 
 
@@ -1046,7 +1047,7 @@ with col_out:
                 </div>
                 <div style="margin-top:0.8rem;font-family:'JetBrains Mono',monospace;font-size:0.72rem;
                     color:rgba(203,213,225,0.72);letter-spacing:0.06em;">
-                    11-ENGINE AVERAGE: {ai_pct:.1f}% AI · {human_pct:.1f}% HUMAN
+                    12-ENGINE AVERAGE: {ai_pct:.1f}% AI · {human_pct:.1f}% HUMAN
                     <span style="opacity:0.65;">({ai_votes} HIGH-RISK · {human_votes} LOWER-RISK)</span>
                 </div>
             </div>
@@ -1161,7 +1162,7 @@ with col_out:
 
 st.markdown(
     '<div class="footer-text">NEXUS+ <span>·</span> AI Detector v6.1 <span>·</span> '
-    '11-Engine Multi-Domain Forensics <span>·</span> '
+    '12-Engine Multi-Domain Forensics <span>·</span> '
     'HuggingFace + OpenAI CLIP + FFT</div>',
     unsafe_allow_html=True,
 )

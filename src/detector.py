@@ -32,7 +32,17 @@ MODELS = {
     "general": "umm-maybe/AI-image-detector",
 }
 
+# Stronger trained detectors used as the primary verdict signal.  The app tries
+# the first model, then falls back to the second if loading fails on Streamlit.
+PRIMARY_AI_DETECTOR_MODELS = [
+    "Ateeqq/ai-vs-human-image-detector",
+    "capcheck/ai-image-detection",
+]
+
 _pipes: dict = {}
+_primary_detector_pipe = None
+_primary_detector_model_id = None
+_primary_detector_error = None
 
 
 def _load_pipelines() -> dict:
@@ -55,6 +65,136 @@ _clip_model, _, _clip_preprocess = open_clip.create_model_and_transforms(
     "ViT-B-32", pretrained="openai"
 )
 _clip_tokenizer = open_clip.get_tokenizer("ViT-B-32")
+
+
+# ─────────────────────────────────────────────────────
+# PRIMARY TRAINED AI-vs-HUMAN DETECTOR
+# ─────────────────────────────────────────────────────
+
+def _normalise_detection_label(label: str) -> str:
+    """Convert model labels into a simple lowercase token string."""
+    return str(label).lower().strip().replace("_", " ").replace("-", " ")
+
+
+def _scores_to_ai_probability(outputs) -> float | None:
+    """Map common HuggingFace real/fake labels to an AI probability."""
+    if not outputs:
+        return None
+    if isinstance(outputs, dict):
+        outputs = [outputs]
+
+    ai_terms = (
+        "fake", "ai", "artificial", "generated", "synthetic",
+        "deepfake", "deep fake", "gan", "diffusion",
+    )
+    real_terms = (
+        "real", "human", "authentic", "natural", "photograph", "original",
+    )
+
+    ai_score = 0.0
+    real_score = 0.0
+    best_label = _normalise_detection_label(outputs[0].get("label", ""))
+    best_score = float(outputs[0].get("score", 0.0))
+
+    for item in outputs:
+        label = _normalise_detection_label(item.get("label", ""))
+        score = float(item.get("score", 0.0))
+        if any(term in label for term in ai_terms):
+            ai_score += score
+        elif any(term in label for term in real_terms):
+            real_score += score
+
+    if ai_score > 0 or real_score > 0:
+        total = ai_score + real_score
+        return ai_score / total if total > 0 else None
+
+    # Last-resort handling for binary models with unmapped labels.
+    if "label 0" in best_label or "class 0" in best_label:
+        return best_score
+    if "label 1" in best_label or "class 1" in best_label:
+        return 1.0 - best_score
+    return None
+
+
+def _load_primary_detector():
+    """Load one strong trained detector lazily to keep app startup manageable."""
+    global _primary_detector_pipe, _primary_detector_model_id, _primary_detector_error
+    if _primary_detector_pipe is not None:
+        return _primary_detector_pipe, _primary_detector_model_id
+
+    errors = []
+    for model_id in PRIMARY_AI_DETECTOR_MODELS:
+        try:
+            pipe = pipeline("image-classification", model=model_id)
+            _primary_detector_pipe = pipe
+            _primary_detector_model_id = model_id
+            _primary_detector_error = None
+            return pipe, model_id
+        except Exception as exc:
+            errors.append(f"{model_id}: {exc}")
+
+    _primary_detector_error = " | ".join(errors)
+    return None, None
+
+
+def engine_primary_deep_detector(image: Image.Image) -> dict:
+    """
+    Main trained AI-vs-human image detector.
+
+    This is intentionally weighted above hand-written heuristics because it is
+    trained on labelled real/fake examples instead of only checking for studio
+    background, saturation, compression, or smooth skin.
+    """
+    pipe, model_id = _load_primary_detector()
+    if pipe is None:
+        return {
+            "score": 50, "max": 100, "raw": 0.5, "active": False,
+            "model_id": "unavailable",
+            "explanation": f"Primary trained detector unavailable. Fallback forensic scoring used. {_primary_detector_error or ''}",
+        }
+
+    try:
+        try:
+            outputs = pipe(image, top_k=5)
+        except TypeError:
+            outputs = pipe(image)
+
+        ai_prob = _scores_to_ai_probability(outputs)
+        if ai_prob is None:
+            return {
+                "score": 50, "max": 100, "raw": 0.5, "active": False,
+                "model_id": model_id,
+                "explanation": f"Primary detector returned unmapped labels: {outputs}. Fallback forensic scoring used.",
+            }
+
+        ai_prob = float(np.clip(ai_prob, 0.0, 1.0))
+        score_100 = round(ai_prob * 100, 1)
+        human_100 = round((1.0 - ai_prob) * 100, 1)
+
+        if score_100 >= 70:
+            summary = "trained classifier strongly favors AI-generated"
+        elif score_100 <= 30:
+            summary = "trained classifier strongly favors authentic/human"
+        else:
+            summary = "trained classifier sees mixed signals"
+
+        return {
+            "score": score_100,
+            "max": 100,
+            "raw": ai_prob,
+            "active": True,
+            "model_id": model_id,
+            "explanation": (
+                f"<b>Primary trained detector:</b> {model_id}<br>"
+                f"Model output: <b>{score_100}% AI</b> vs <b>{human_100}% human</b>; {summary}."
+            ),
+        }
+    except Exception as exc:
+        return {
+            "score": 50, "max": 100, "raw": 0.5, "active": False,
+            "model_id": model_id,
+            "explanation": f"Primary trained detector failed during inference: {exc}. Fallback forensic scoring used.",
+        }
 
 
 # ═════════════════════════════════════════════════════
@@ -961,6 +1101,7 @@ def full_image_analysis(image: Image.Image) -> dict:
     Run 10 local forensic & neural engines and produce a final weighted verdict
     calibrated for modern AI diffusion models.
     """
+    primary  = engine_primary_deep_detector(image)
     neural   = engine_neural_ensemble(image)
     clip     = engine_clip_semantic(image)
     texture  = engine_texture_smoothness(image)
@@ -974,6 +1115,11 @@ def full_image_analysis(image: Image.Image) -> dict:
     ft_vit   = engine_fine_tuned_vit(image)
 
     engines_dict = {
+        "primary_deep_detector": {
+            "name": "Primary AI-vs-Human Detector",
+            "icon": "🎯",
+            **primary,
+        },
         "neural_ensemble": {
             "name": "Neural Network Ensemble",
             "icon": "🧠",
@@ -1031,94 +1177,98 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Stable portfolio scoring.
+    # Model-led stable scoring.
     #
-    # The detector still runs and displays all 11 engines, but the final verdict
-    # is based only on the most useful/stable signals. Context-sensitive checks
-    # like color, plain background, portrait framing, and watermark detection are
-    # kept for explanation only because they can false-positive on real studio
-    # photos, screenshots, compressed images, beauty filters, and white walls.
+    # Significant accuracy improvement comes from adding a trained AI-vs-human
+    # classifier and making it the main verdict signal. The forensic engines are
+    # still useful, but mostly as support/explanation because hand-written rules
+    # false-positive on filters, studio lighting, compression, screenshots, etc.
     total_engine_count = len(engines_dict)
 
-    final_weights = {
-        "clip_semantic": 1.15,
-        "texture_smoothness": 1.45,
-        "frequency": 1.45,
-        "ela_compression": 1.10,
-        "face_symmetry": 0.65,
-        "neural_ensemble": 0.35,
+    support_weights = {
+        "clip_semantic": 1.10,
+        "texture_smoothness": 1.25,
+        "frequency": 1.25,
+        "ela_compression": 0.95,
+        "face_symmetry": 0.55,
+        "neural_ensemble": 0.25,
     }
 
-    final_engine_scores = []
-    decision_breakdown = []
-
-    for engine_key, weight in final_weights.items():
+    support_scores = []
+    for engine_key, weight in support_weights.items():
         engine = engines_dict.get(engine_key, {})
         max_score = engine.get("max", 0)
         if max_score <= 0:
             continue
-        ai_percentage = engine.get("score", 0) / max_score * 100
-        final_engine_scores.append((ai_percentage, weight))
-        decision_breakdown.append({
-            "engine": engine.get("name", engine_key),
-            "score": round(ai_percentage, 1),
-            "weight": weight,
-        })
+        support_scores.append((engine.get("score", 0) / max_score * 100, weight))
 
-    # Use the fine-tuned ViT heavily, but only if the checkpoint is actually
-    # present and loaded. Missing model files must not count as AUTHENTIC votes.
+    if support_scores:
+        support_weight = sum(weight for _score, weight in support_scores)
+        support_ai_score = sum(score * weight for score, weight in support_scores) / support_weight
+    else:
+        support_ai_score = 50.0
+
+    support_percentages = [score for score, _weight in support_scores]
+    strong_support_ai = sum(score >= 70 for score in support_percentages)
+    medium_support_ai = sum(score >= 55 for score in support_percentages)
+    strong_support_real = sum(score <= 30 for score in support_percentages)
+
+    primary_engine = engines_dict.get("primary_deep_detector", {})
+    primary_active = bool(primary_engine.get("active"))
+    primary_ai_score = float(primary_engine.get("score", 50.0))
+
     ft_engine = engines_dict.get("fine_tuned_vit", {})
-    if ft_engine.get("active") and ft_engine.get("max", 0) > 0:
-        ft_percentage = ft_engine.get("score", 0) / ft_engine.get("max", 100) * 100
-        final_engine_scores.append((ft_percentage, 4.0))
-        decision_breakdown.append({
-            "engine": ft_engine.get("name", "Fine-Tuned ViT Classifier"),
-            "score": round(ft_percentage, 1),
-            "weight": 4.0,
-        })
+    ft_active = bool(ft_engine.get("active"))
+    ft_ai_score = float(ft_engine.get("score", 50.0))
 
-    if not final_engine_scores:
-        final_engine_scores = [(50.0, 1.0)]
+    if ft_active:
+        # If your own fine-tuned model exists, trust it most, then trained HF,
+        # then forensic support.
+        if primary_active:
+            ai_score = (0.50 * ft_ai_score) + (0.35 * primary_ai_score) + (0.15 * support_ai_score)
+        else:
+            ai_score = (0.70 * ft_ai_score) + (0.30 * support_ai_score)
+    elif primary_active:
+        # Main hosted path: trained model leads, forensic engines support.
+        ai_score = (0.72 * primary_ai_score) + (0.28 * support_ai_score)
+    else:
+        # Fallback if model cannot load on Streamlit.
+        ai_score = support_ai_score
 
-    primary_percentages = [score for score, _weight in final_engine_scores]
-    strong_ai_signals = sum(score >= 70 for score in primary_percentages)
-    medium_ai_signals = sum(score >= 55 for score in primary_percentages)
-    low_ai_signals = sum(score <= 30 for score in primary_percentages)
-
-    total_weight = sum(weight for _score, weight in final_engine_scores)
-    weighted_ai_score = sum(score * weight for score, weight in final_engine_scores) / total_weight
-
-    # Conservative consensus. This reduces false positives on real photos while
-    # still flagging images where several independent primary engines agree.
-    ai_score = weighted_ai_score
-    if strong_ai_signals >= 3:
-        ai_score = max(ai_score, 68.0)
-    elif strong_ai_signals >= 2 and medium_ai_signals >= 3:
-        ai_score = max(ai_score, 62.0)
-    elif strong_ai_signals >= 1 and medium_ai_signals >= 4:
-        ai_score = max(ai_score, 58.0)
-
-    # If most stable engines strongly say low AI risk, avoid a false AI verdict
-    # caused by one noisy engine.
-    if low_ai_signals >= 3 and strong_ai_signals <= 1:
-        ai_score = min(ai_score, 42.0)
+    # Consensus nudges, not huge threshold hacks.
+    if primary_active:
+        if primary_ai_score >= 82 and medium_support_ai >= 2:
+            ai_score = max(ai_score, 72.0)
+        elif primary_ai_score <= 18 and strong_support_ai <= 1:
+            ai_score = min(ai_score, 28.0)
+        elif primary_ai_score >= 70 and strong_support_ai >= 2:
+            ai_score = max(ai_score, 66.0)
+        elif primary_ai_score <= 30 and strong_support_real >= 2:
+            ai_score = min(ai_score, 35.0)
+    else:
+        if strong_support_ai >= 3:
+            ai_score = max(ai_score, 66.0)
+        elif strong_support_real >= 3 and strong_support_ai <= 1:
+            ai_score = min(ai_score, 38.0)
 
     ai_score = float(np.clip(ai_score, 0, 100))
     ai_conf = ai_score / 100.0
     human_conf = 1.0 - ai_conf
 
-    high_risk_engine_count = strong_ai_signals
+    high_risk_engine_count = strong_support_ai + (1 if primary_active and primary_ai_score >= 70 else 0)
     human_engine_count = total_engine_count - high_risk_engine_count
 
-    # Binary output for your UI: AI-GENERATED or AUTHENTIC.
-    # Borderline cases intentionally fall back to AUTHENTIC instead of randomly
-    # flipping between labels across different photo styles.
-    if ai_score >= 64.0 or (ai_score >= 58.0 and strong_ai_signals >= 2) or strong_ai_signals >= 3:
+    # Verdict policy. High-confidence trained-model agreement gives hard labels;
+    # genuinely mixed cases become REVIEW NEEDED instead of confidently wrong.
+    if ai_score >= 65.0 and (primary_ai_score >= 58.0 or strong_support_ai >= 2):
         verdict       = "AI-GENERATED"
         verdict_label = "🚨 AI-GENERATED"
-    else:
+    elif ai_score <= 35.0 and (not primary_active or primary_ai_score <= 42.0) and strong_support_ai <= 1:
         verdict       = "AUTHENTIC"
         verdict_label = "✅ AUTHENTIC"
+    else:
+        verdict       = "UNCERTAIN"
+        verdict_label = "⚠️ REVIEW NEEDED"
 
     return {
         "verdict":          verdict,
