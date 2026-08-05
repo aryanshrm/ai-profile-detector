@@ -1031,34 +1031,83 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Normalize every engine to a 0-100 AI-risk percentage.  The final result
-    # uses all of those percentages, rather than merely counting high-risk
-    # badges.  A successfully trained local ViT is given greater influence
-    # because it learns from confirmed examples, while the other engines remain
-    # part of the final forensic consensus.
+    # Calibrated binary scoring for hosted demos.
+    #
+    # The earlier implementation averaged every engine equally. That made real
+    # false negatives likely because inactive/optional engines such as the local
+    # fine-tuned ViT and a clean watermark detector contributed 0% AI risk and
+    # pulled obvious AI images back toward AUTHENTIC.  For portfolio hosting we
+    # skip inactive optional engines, keep watermark as a weak signal only when
+    # it actually finds something, and give stronger weight to low-level image
+    # forensics that are harder for old neural classifiers to judge.
     total_engine_count = len(engines_dict)
-    weighted_engine_scores = []
-    for engine_key, engine in engines_dict.items():
-        if engine["max"] <= 0:
-            continue
-        ai_percentage = engine["score"] / engine["max"] * 100
-        weight = 4.0 if engine_key == "fine_tuned_vit" and engine.get("active") else 1.0
-        weighted_engine_scores.append((ai_percentage, weight))
+    engine_weights = {
+        "neural_ensemble": 0.75,
+        "clip_semantic": 1.00,
+        "texture_smoothness": 1.45,
+        "color_forensics": 1.20,
+        "frequency": 1.45,
+        "edge_sharpness": 1.10,
+        "portrait_style": 1.00,
+        "face_symmetry": 1.15,
+        "ela_compression": 1.25,
+        "fine_tuned_vit": 4.00,
+        "watermark_detection": 0.35,
+    }
 
-    engine_ai_percentages = [score for score, _weight in weighted_engine_scores]
-    high_risk_engine_count = sum(percent > 60 for percent in engine_ai_percentages)
+    weighted_engine_scores = []
+    visible_engine_ai_percentages = []
+
+    for engine_key, engine in engines_dict.items():
+        if engine.get("max", 0) <= 0:
+            continue
+
+        ai_percentage = engine["score"] / engine["max"] * 100
+        visible_engine_ai_percentages.append(ai_percentage)
+
+        # Do not let missing optional engines vote as "human".
+        if engine_key == "fine_tuned_vit" and not engine.get("active"):
+            continue
+
+        # No watermark is normal and should not strongly prove authenticity.
+        if engine_key == "watermark_detection" and not engine.get("detected"):
+            continue
+
+        weighted_engine_scores.append((ai_percentage, engine_weights.get(engine_key, 1.0)))
+
+    if not weighted_engine_scores:
+        weighted_engine_scores = [(50.0, 1.0)]
+
+    high_risk_engine_count = sum(percent >= 60 for percent in visible_engine_ai_percentages)
+    moderate_risk_engine_count = sum(percent >= 35 for percent in visible_engine_ai_percentages)
     human_engine_count = total_engine_count - high_risk_engine_count
 
     total_weight = sum(weight for _score, weight in weighted_engine_scores)
-    ai_conf = sum(score * weight for score, weight in weighted_engine_scores) / (total_weight * 100)
+    weighted_ai_score = sum(score * weight for score, weight in weighted_engine_scores) / total_weight
+
+    # Consensus boost: multiple independent forensic flags should outweigh one
+    # old neural classifier saying "real". This fixes AI images being labelled
+    # AUTHENTIC while keeping the final UI binary: AI-GENERATED or AUTHENTIC.
+    ai_score = weighted_ai_score
+    if high_risk_engine_count >= 4:
+        ai_score = max(ai_score, 72.0)
+    elif high_risk_engine_count >= 3:
+        ai_score = max(ai_score, 62.0)
+    elif high_risk_engine_count >= 2:
+        ai_score = max(ai_score, 52.0)
+    elif high_risk_engine_count >= 1 and moderate_risk_engine_count >= 4:
+        ai_score = max(ai_score, 46.0)
+
+    ai_score = float(np.clip(ai_score, 0, 100))
+    ai_conf = ai_score / 100.0
     human_conf = 1.0 - ai_conf
 
-    if human_conf > ai_conf:
-        verdict       = "AUTHENTIC"
-        verdict_label = "✅ AUTHENTIC"
-    else:
+    if ai_score >= 45.0 or high_risk_engine_count >= 2:
         verdict       = "AI-GENERATED"
         verdict_label = "🚨 AI-GENERATED"
+    else:
+        verdict       = "AUTHENTIC"
+        verdict_label = "✅ AUTHENTIC"
 
     return {
         "verdict":          verdict,
