@@ -149,14 +149,14 @@ def engine_primary_deep_detector(image: Image.Image) -> dict:
     Main trained AI-vs-human image detector.
 
     Disabled by default because the available public detectors were producing
-    severe false positives on real actor/profile images. Gemini/Groq vision or a
+    severe false positives on real actor/profile images. Gemini vision or a
     properly fine-tuned local model should be used for high-confidence verdicts.
     """
     if not ENABLE_EXPERIMENTAL_HF_DETECTORS:
         return {
             "score": 0, "max": 100, "raw": 0.0, "active": False,
             "model_id": "disabled",
-            "explanation": "Experimental HuggingFace detector disabled to prevent false positives on real actor/profile photos. Use Gemini/Groq vision or a trained local ViT for high-confidence AI labels.",
+            "explanation": "Experimental HuggingFace detector disabled to prevent false positives on real actor/profile photos. Use Gemini vision or a trained local ViT for high-confidence AI labels.",
         }
 
     pipe, model_id = _load_primary_detector()
@@ -759,18 +759,42 @@ def _clean_json_from_response(text: str) -> dict:
 # ENGINE 8 — GEMINI & GROQ LLM VISION FORENSICS API
 # ═════════════════════════════════════════════════════
 
+def _list_available_gemini_models(gemini_key: str) -> list[str]:
+    """Return Gemini model names available to this specific API key/project."""
+    try:
+        res = requests.get(
+            f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}",
+            timeout=12,
+        )
+        if res.status_code != 200:
+            return []
+        data = res.json()
+        models = []
+        for model in data.get("models", []):
+            methods = model.get("supportedGenerationMethods", [])
+            name = model.get("name", "")
+            if "generateContent" in methods and name.startswith("models/gemini"):
+                models.append(name.replace("models/", ""))
+        return models
+    except Exception:
+        return []
+
+
 def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str = None) -> dict:
     """
-    Multi-modal LLM Vision inspection using Gemini API (Gemini 2.5 Flash / 2.0 Flash / 1.5 Flash / 1.5 Pro)
-    or Groq Vision API (Llama 3.2 Vision).
+    Gemini-only multimodal vision verification.
+
+    This version does not depend on Groq. It automatically checks which Gemini
+    models are available for the user's API key, then tries the best available
+    generateContent model. If the key has no free quota, the engine reports that
+    clearly instead of silently falling back to bad local classifiers.
     """
     gemini_key = gemini_key or os.environ.get("GEMINI_API_KEY", "")
-    groq_key   = groq_key   or os.environ.get("GROQ_API_KEY", "")
 
-    if not gemini_key and not groq_key:
+    if not gemini_key:
         return {
             "score": 0, "max": 100, "raw": 0.0, "active": False,
-            "explanation": "Gemini/Groq API key not configured. Add GEMINI_API_KEY in Streamlit Cloud secrets to activate this engine.",
+            "explanation": "Gemini API key not configured. Add GEMINI_API_KEY in Streamlit Cloud secrets to activate this engine.",
         }
 
     buffer = io.BytesIO()
@@ -778,108 +802,97 @@ def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str 
     img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
     prompt = (
-        "You are an expert AI image forensic analyst. Carefully examine this profile picture / image "
-        "to determine if it is a real authentic human photograph or an AI-generated image (e.g. Midjourney, SDXL, Stable Diffusion, DALL-E, Flux, GAN, etc.).\n"
-        "Examine skin texture, pore details, hair strand integration, eye specular reflections, background depth, and lighting realism.\n"
-        "Return ONLY a JSON object with keys:\n"
-        '{"is_ai": boolean, "ai_probability": float (between 0.0 and 1.0), "reason": string}'
+        "You are a careful image authenticity reviewer. Decide whether the uploaded image is most likely a real/authentic photograph or AI-generated. "
+        "Be conservative: real celebrity photos, professional portraits, filtered selfies, compressed WhatsApp images, smooth skin, and studio lighting should NOT be called AI unless there are clear synthetic artifacts. "
+        "Look for impossible geometry, distorted facial features, inconsistent eyes/teeth/hair/hands, unnatural texture, and diffusion artifacts. "
+        "Return ONLY valid JSON with keys: "
+        '{"is_ai": boolean, "ai_probability": number between 0 and 1, "reason": string}. '
+        "Use ai_probability below 0.40 for likely real photos, above 0.75 only for clear AI generation."
     )
 
-    ai_prob = None
-    reason  = ""
-    provider = ""
+    preferred_models = [
+        # Newer names first. Only models actually available to the key are used.
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+    ]
+
+    available = _list_available_gemini_models(gemini_key)
+    if available:
+        models_to_try = [m for m in preferred_models if m in available]
+        # If Google returns a model not in our preference list, try it after the preferred list.
+        models_to_try += [m for m in available if m not in models_to_try]
+    else:
+        # If listModels fails, still try a small safe set.
+        models_to_try = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite", "gemini-2.0-flash"]
+
     error_logs = []
 
-    # 1. Gemini API Call
-    if gemini_key:
-        models_to_try = [
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-        ]
-        for mod in models_to_try:
-            try:
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={gemini_key}"
-                payload = {
-                    "contents": [{
-                        "role": "user",
-                        "parts": [
-                            {"text": prompt},
-                            {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
-                        ]
-                    }],
-                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0}
-                }
-                res = requests.post(url, json=payload, timeout=15)
-                if res.status_code == 200:
-                    data_json = res.json()
-                    candidates = data_json.get("candidates", [])
-                    if candidates:
-                        text_out = candidates[0]["content"]["parts"][0]["text"]
-                        data = _clean_json_from_response(text_out)
-                        ai_prob = float(data.get("ai_probability", 0.5))
-                        reason = data.get("reason", f"Gemini {mod} Vision analysis completed.")
-                        provider = f"Gemini ({mod})"
-                        break
-                else:
-                    err_body = res.json().get("error", {}) if res.headers.get("content-type", "").startswith("application/json") else {}
-                    err_msg = err_body.get("message", res.text[:150])
-                    error_logs.append(f"Gemini {mod} HTTP {res.status_code}: {err_msg}")
-            except Exception as e:
-                error_logs.append(f"Gemini {mod} Exception: {str(e)}")
+    for mod in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                    ],
+                }],
+                "generationConfig": {
+                    "responseMimeType": "application/json",
+                    "temperature": 0.0,
+                },
+            }
+            res = requests.post(url, json=payload, timeout=25)
+            if res.status_code != 200:
+                try:
+                    err_body = res.json().get("error", {})
+                    err_msg = err_body.get("message", res.text[:220])
+                except Exception:
+                    err_msg = res.text[:220]
+                error_logs.append(f"{mod} HTTP {res.status_code}: {err_msg}")
+                continue
 
-    # 2. Groq Vision API Call (Fallback or if Groq key provided)
-    if ai_prob is None and groq_key:
-        groq_models = [
-            "llama-3.2-11b-vision-preview",
-            "llama-3.2-90b-vision-preview",
-        ]
-        for mod in groq_models:
-            try:
-                url = "https://api.groq.com/openai/v1/chat/completions"
-                headers = {"Authorization": f"Bearer {groq_key}", "Content-Type": "application/json"}
-                payload = {
-                    "model": mod,
-                    "messages": [{
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                        ]
-                    }],
-                    "response_format": {"type": "json_object"}
-                }
-                res = requests.post(url, headers=headers, json=payload, timeout=15)
-                if res.status_code == 200:
-                    text_out = res.json()["choices"][0]["message"]["content"]
-                    data = _clean_json_from_response(text_out)
-                    ai_prob = float(data.get("ai_probability", 0.5))
-                    reason = data.get("reason", f"Groq {mod} Vision inspection completed.")
-                    provider = f"Groq Vision ({mod})"
-                    break
-                else:
-                    err_body = res.json().get("error", {}) if res.headers.get("content-type", "").startswith("application/json") else {}
-                    err_msg = err_body.get("message", res.text[:150])
-                    error_logs.append(f"Groq {mod} HTTP {res.status_code}: {err_msg}")
-            except Exception as e:
-                error_logs.append(f"Groq {mod} Exception: {str(e)}")
+            data_json = res.json()
+            candidates = data_json.get("candidates", [])
+            if not candidates:
+                error_logs.append(f"{mod}: no candidates returned")
+                continue
 
-    if ai_prob is None:
-        # All API attempts failed. Return an active engine with a detailed explanation.
-        err_detail = " | ".join(error_logs) if error_logs else "API call unsuccessful or timed out."
-        return {
-            "score": 0,
-            "max": 100,
-            "raw": 0.0,
-            "active": True,
-            "explanation": f"LLM Vision API call failed: {err_detail}",
-        }
+            text_out = candidates[0]["content"]["parts"][0]["text"]
+            data = _clean_json_from_response(text_out)
+            ai_prob = float(data.get("ai_probability", 0.5))
+            ai_prob = float(np.clip(ai_prob, 0.0, 1.0))
+            reason = data.get("reason", "Gemini vision analysis completed.")
+            score_100 = round(ai_prob * 100, 1)
 
-    score_100 = round(ai_prob * 100, 1)
+            return {
+                "score": score_100,
+                "max": 100,
+                "raw": ai_prob,
+                "active": True,
+                "provider": f"Gemini ({mod})",
+                "explanation": f"<b>Gemini Vision ({mod}) — {score_100}% AI:</b><br>{reason}",
+            }
+        except Exception as exc:
+            error_logs.append(f"{mod} exception: {exc}")
+
+    detail = " | ".join(error_logs) if error_logs else "No Gemini model was available for this API key."
+    quota_hint = ""
+    if "quota" in detail.lower() or "429" in detail:
+        quota_hint = " Your Gemini API key currently has no usable quota for the attempted model. Create a new AI Studio key/project or enable billing/quota, then reboot the app."
+
     return {
-        "score": score_100, "max": 100, "raw": ai_prob, "active": True,
-        "explanation": f"<b>{provider} Analysis ({score_100}% AI):</b><br>{reason}"
+        "score": 0,
+        "max": 100,
+        "raw": 0.0,
+        "active": False,
+        "explanation": f"Gemini Vision failed: {detail}{quota_hint}",
     }
 
 
@@ -1139,7 +1152,7 @@ def full_image_analysis(image: Image.Image) -> dict:
 
     engines_dict = {
         "llm_vision": {
-            "name": "Gemini/Groq Vision Verification",
+            "name": "Gemini Vision Verification",
             "icon": "👁️",
             **vision,
         },
@@ -1209,7 +1222,7 @@ def full_image_analysis(image: Image.Image) -> dict:
     #
     # Important: the hosted HuggingFace detector can be over-confident on real
     # WhatsApp / compressed / filtered photos. Therefore it is NOT allowed to
-    # mark an image AI by itself. A hard AI verdict needs either Gemini/Groq
+    # mark an image AI by itself. A hard AI verdict needs either Gemini
     # vision verification, or extremely strong agreement from multiple stable
     # forensic engines. This intentionally reduces false positives on real pics.
     total_engine_count = len(engines_dict)
@@ -1242,7 +1255,7 @@ def full_image_analysis(image: Image.Image) -> dict:
 
     decision_source = "real-first fallback"
 
-    # 1) If Gemini/Groq is configured, trust it most but still use a high AI bar.
+    # 1) If Gemini is configured, trust it most but still use a high AI bar.
     if vision_active:
         decision_source = "vision model"
         if vision_ai_score >= 85:

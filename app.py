@@ -920,7 +920,7 @@ with col_in:
     )
 
     engines_info = [
-        ("01", "Gemini/Groq Vision Verification", "Optional API Primary Review"),
+        ("01", "Gemini Vision Verification", "Gemini API Primary Review"),
         ("02", "Primary AI-vs-Human Detector", "Trained HuggingFace Classifier"),
         ("03", "Neural Network Ensemble", "Secondary Classifiers"),
         ("04", "CLIP Semantic Analysis", "OpenAI Zero-Shot"),
