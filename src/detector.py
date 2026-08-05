@@ -44,6 +44,12 @@ _primary_detector_pipe = None
 _primary_detector_model_id = None
 _primary_detector_error = None
 
+# These public HF classifiers are useful for experiments but can be badly
+# over-confident on real celebrity/WhatsApp/profile photos. Keep them disabled
+# by default for portfolio stability. Set ENABLE_EXPERIMENTAL_HF_DETECTORS=1
+# only if you want to inspect their raw outputs.
+ENABLE_EXPERIMENTAL_HF_DETECTORS = os.environ.get("ENABLE_EXPERIMENTAL_HF_DETECTORS", "0") == "1"
+
 
 def _load_pipelines() -> dict:
     global _pipes
@@ -129,6 +135,7 @@ def _load_primary_detector():
             _primary_detector_pipe = pipe
             _primary_detector_model_id = model_id
             _primary_detector_error = None
+
             return pipe, model_id
         except Exception as exc:
             errors.append(f"{model_id}: {exc}")
@@ -141,10 +148,17 @@ def engine_primary_deep_detector(image: Image.Image) -> dict:
     """
     Main trained AI-vs-human image detector.
 
-    This is intentionally weighted above hand-written heuristics because it is
-    trained on labelled real/fake examples instead of only checking for studio
-    background, saturation, compression, or smooth skin.
+    Disabled by default because the available public detectors were producing
+    severe false positives on real actor/profile images. Gemini/Groq vision or a
+    properly fine-tuned local model should be used for high-confidence verdicts.
     """
+    if not ENABLE_EXPERIMENTAL_HF_DETECTORS:
+        return {
+            "score": 0, "max": 100, "raw": 0.0, "active": False,
+            "model_id": "disabled",
+            "explanation": "Experimental HuggingFace detector disabled to prevent false positives on real actor/profile photos. Use Gemini/Groq vision or a trained local ViT for high-confidence AI labels.",
+        }
+
     pipe, model_id = _load_primary_detector()
     if pipe is None:
         return {
@@ -203,9 +217,18 @@ def engine_primary_deep_detector(image: Image.Image) -> dict:
 
 def engine_neural_ensemble(image: Image.Image) -> dict:
     """
-    HuggingFace classifiers. Low weight — these models fail on modern
-    diffusion outputs but remain useful as a secondary signal.
+    Legacy HuggingFace classifiers.
+
+    Disabled by default because these older models often false-positive on real
+    celebrity/profile images and confuse users. They can be re-enabled with
+    ENABLE_EXPERIMENTAL_HF_DETECTORS=1 for debugging only.
     """
+    if not ENABLE_EXPERIMENTAL_HF_DETECTORS:
+        return {
+            "score": 0, "max": 100, "raw": 0.0, "active": False,
+            "explanation": "Legacy neural classifiers disabled to avoid false positives on real profile photos.",
+        }
+
     pipes = _load_pipelines()
     AI_LABELS   = {"artificial", "ai", "fake", "ai-generated", "generated", "deepfake"}
     REAL_LABELS = {"human", "real", "genuine", "authentic"}
@@ -747,7 +770,7 @@ def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str 
     if not gemini_key and not groq_key:
         return {
             "score": 0, "max": 100, "raw": 0.0, "active": False,
-            "explanation": "LLM Vision API keys (GEMINI_API_KEY / GROQ_API_KEY) not provided. Engine idle.",
+            "explanation": "Gemini/Groq API key not configured. Add GEMINI_API_KEY in Streamlit Cloud secrets to activate this engine.",
         }
 
     buffer = io.BytesIO()
@@ -786,8 +809,7 @@ def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str 
                             {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
                         ]
                     }],
-                    "generationConfig": {"response_mime_type": "application/json"},
-                    "temperature": 0.0
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0}
                 }
                 res = requests.post(url, json=payload, timeout=15)
                 if res.status_code == 200:
