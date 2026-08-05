@@ -1183,123 +1183,113 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Vision-led stable scoring.
+    # Simple conservative final verdict.
     #
-    # The biggest practical accuracy improvement is to use a modern multimodal
-    # vision model when an API key is available.  The trained HuggingFace model
-    # becomes the second signal, and the hand-written forensic engines become
-    # supporting evidence only.  This avoids the old problem where real studio
-    # photos, WhatsApp compression, smooth skin, or white backgrounds were called
-    # AI by simple heuristics.
+    # Do NOT let hand-written heuristics decide the final label. They are useful
+    # for explanations, but they create false positives on real photos with
+    # WhatsApp compression, filters, smooth skin, or plain backgrounds.
+    #
+    # Final label now uses this priority:
+    # 1) Gemini/Groq vision API, if configured
+    # 2) Fine-tuned local ViT, if available
+    # 3) Primary HuggingFace AI-vs-human model, if available
+    # 4) Conservative fallback from forensic support
     total_engine_count = len(engines_dict)
-
-    support_weights = {
-        "clip_semantic": 1.00,
-        "texture_smoothness": 1.00,
-        "frequency": 1.00,
-        "ela_compression": 0.75,
-        "face_symmetry": 0.35,
-        "neural_ensemble": 0.20,
-    }
-
-    support_scores = []
-    for engine_key, weight in support_weights.items():
-        engine = engines_dict.get(engine_key, {})
-        max_score = engine.get("max", 0)
-        if max_score <= 0:
-            continue
-        support_scores.append((engine.get("score", 0) / max_score * 100, weight))
-
-    if support_scores:
-        support_weight = sum(weight for _score, weight in support_scores)
-        support_ai_score = sum(score * weight for score, weight in support_scores) / support_weight
-    else:
-        support_ai_score = 50.0
-
-    support_percentages = [score for score, _weight in support_scores]
-    strong_support_ai = sum(score >= 75 for score in support_percentages)
-    medium_support_ai = sum(score >= 60 for score in support_percentages)
-    strong_support_real = sum(score <= 30 for score in support_percentages)
 
     vision_engine = engines_dict.get("llm_vision", {})
     vision_active = bool(vision_engine.get("active")) and "failed" not in str(vision_engine.get("explanation", "")).lower()
     vision_ai_score = float(vision_engine.get("score", 50.0))
 
-    primary_engine = engines_dict.get("primary_deep_detector", {})
-    primary_active = bool(primary_engine.get("active"))
-    primary_ai_score = float(primary_engine.get("score", 50.0))
-
     ft_engine = engines_dict.get("fine_tuned_vit", {})
     ft_active = bool(ft_engine.get("active"))
     ft_ai_score = float(ft_engine.get("score", 50.0))
 
-    if vision_active and ft_active:
-        ai_score = (0.50 * vision_ai_score) + (0.35 * ft_ai_score) + (0.15 * support_ai_score)
-    elif vision_active and primary_active:
-        ai_score = (0.58 * vision_ai_score) + (0.30 * primary_ai_score) + (0.12 * support_ai_score)
-    elif vision_active:
-        ai_score = (0.78 * vision_ai_score) + (0.22 * support_ai_score)
-    elif ft_active and primary_active:
-        ai_score = (0.50 * ft_ai_score) + (0.35 * primary_ai_score) + (0.15 * support_ai_score)
-    elif ft_active:
-        ai_score = (0.70 * ft_ai_score) + (0.30 * support_ai_score)
-    elif primary_active:
-        ai_score = (0.72 * primary_ai_score) + (0.28 * support_ai_score)
-    else:
-        ai_score = support_ai_score
+    primary_engine = engines_dict.get("primary_deep_detector", {})
+    primary_active = bool(primary_engine.get("active"))
+    primary_ai_score = float(primary_engine.get("score", 50.0))
 
-    # Conservative guardrails.  We prefer REVIEW NEEDED over confidently calling
-    # real photos AI.  A hard AI verdict requires a strong modern-model signal,
-    # or several independent supporting engines agreeing.
+    support_keys = ["clip_semantic", "texture_smoothness", "frequency", "ela_compression"]
+    support_scores = []
+    for key in support_keys:
+        engine = engines_dict.get(key, {})
+        max_score = engine.get("max", 0)
+        if max_score > 0:
+            support_scores.append(engine.get("score", 0) / max_score * 100)
+
+    support_ai_score = float(np.mean(support_scores)) if support_scores else 50.0
+    strong_support_ai = sum(score >= 75 for score in support_scores)
+
+    source = "forensic fallback"
+
     if vision_active:
-        if vision_ai_score >= 86:
-            ai_score = max(ai_score, 76.0)
-        elif vision_ai_score <= 22:
-            ai_score = min(ai_score, 28.0)
-        elif vision_ai_score <= 40 and strong_support_ai <= 1:
-            ai_score = min(ai_score, 42.0)
-    elif primary_active:
-        if primary_ai_score >= 85 and medium_support_ai >= 2:
-            ai_score = max(ai_score, 72.0)
-        elif primary_ai_score <= 25 and strong_support_ai <= 1:
-            ai_score = min(ai_score, 32.0)
+        # Best mode: modern multimodal model. Hard AI only when strongly AI.
+        ai_score = vision_ai_score
+        source = "vision model"
+        if ai_score >= 82.0:
+            verdict       = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 55.0:
+            verdict       = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        else:
+            verdict       = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
 
-    # If stable support is mostly real, block a noisy AI label.
-    if strong_support_real >= 3 and strong_support_ai <= 1 and (not vision_active or vision_ai_score < 65):
-        ai_score = min(ai_score, 42.0)
+    elif ft_active:
+        # Own trained model, if present.
+        ai_score = ft_ai_score
+        source = "fine-tuned ViT"
+        if ai_score >= 82.0:
+            verdict       = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 55.0:
+            verdict       = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        else:
+            verdict       = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
+
+    elif primary_active:
+        # Hosted free path. This model can still false-positive, so be stricter.
+        ai_score = primary_ai_score
+        source = "trained HF detector"
+        if ai_score >= 90.0 and strong_support_ai >= 1:
+            verdict       = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score >= 95.0:
+            verdict       = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 70.0:
+            verdict       = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        else:
+            verdict       = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
+
+    else:
+        # Last fallback: only call AI if multiple stable forensic engines are
+        # extremely high. Otherwise do not falsely accuse real images.
+        ai_score = support_ai_score
+        source = "forensic fallback"
+        if ai_score >= 85.0 and strong_support_ai >= 3:
+            verdict       = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 75.0:
+            verdict       = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        else:
+            verdict       = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
 
     ai_score = float(np.clip(ai_score, 0, 100))
     ai_conf = ai_score / 100.0
     human_conf = 1.0 - ai_conf
-
-    high_risk_engine_count = strong_support_ai
-    if vision_active and vision_ai_score >= 70:
-        high_risk_engine_count += 1
-    if primary_active and primary_ai_score >= 70:
-        high_risk_engine_count += 1
+    high_risk_engine_count = 1 if verdict == "AI-GENERATED" else 0
     human_engine_count = total_engine_count - high_risk_engine_count
 
-    # Final verdict policy.
-    if vision_active:
-        if ai_score >= 70.0 and vision_ai_score >= 65.0:
-            verdict       = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 40.0 and vision_ai_score <= 45.0:
-            verdict       = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-    else:
-        if ai_score >= 72.0 and (primary_ai_score >= 70.0 or strong_support_ai >= 3):
-            verdict       = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 35.0 and strong_support_ai <= 1:
-            verdict       = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
+    # Show which source made the final decision inside the primary engine text.
+    if "primary_deep_detector" in engines_dict:
+        engines_dict["primary_deep_detector"]["decision_source"] = source
 
     return {
         "verdict":          verdict,
