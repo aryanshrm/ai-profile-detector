@@ -1085,24 +1085,28 @@ def full_image_analysis(image: Image.Image) -> dict:
     total_weight = sum(weight for _score, weight in weighted_engine_scores)
     weighted_ai_score = sum(score * weight for score, weight in weighted_engine_scores) / total_weight
 
-    # Consensus boost: multiple independent forensic flags should outweigh one
-    # old neural classifier saying "real". This fixes AI images being labelled
-    # AUTHENTIC while keeping the final UI binary: AI-GENERATED or AUTHENTIC.
+    # Balanced consensus boost.
+    # Keep the detector useful for obvious AI images, but avoid calling real
+    # photos AI just because 1-2 heuristic engines fire on studio lighting,
+    # smooth skin, compression, or a plain background.
     ai_score = weighted_ai_score
     if high_risk_engine_count >= 4:
-        ai_score = max(ai_score, 72.0)
+        ai_score = max(ai_score, 68.0)
     elif high_risk_engine_count >= 3:
-        ai_score = max(ai_score, 62.0)
-    elif high_risk_engine_count >= 2:
+        ai_score = max(ai_score, 58.0)
+    elif high_risk_engine_count >= 2 and moderate_risk_engine_count >= 5:
         ai_score = max(ai_score, 52.0)
-    elif high_risk_engine_count >= 1 and moderate_risk_engine_count >= 4:
-        ai_score = max(ai_score, 46.0)
+    elif high_risk_engine_count >= 1 and moderate_risk_engine_count >= 5:
+        ai_score = max(ai_score, 45.0)
 
     ai_score = float(np.clip(ai_score, 0, 100))
     ai_conf = ai_score / 100.0
     human_conf = 1.0 - ai_conf
 
-    if ai_score >= 45.0 or high_risk_engine_count >= 2:
+    # Binary verdict with a stricter AI threshold to reduce false positives.
+    # AI-GENERATED requires either a high final score or strong multi-engine
+    # agreement. Everything else is AUTHENTIC.
+    if ai_score >= 58.0 or (ai_score >= 52.0 and high_risk_engine_count >= 2) or high_risk_engine_count >= 3:
         verdict       = "AI-GENERATED"
         verdict_label = "🚨 AI-GENERATED"
     else:
