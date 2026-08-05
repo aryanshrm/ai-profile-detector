@@ -1183,17 +1183,13 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Simple conservative final verdict.
+    # Real-first final verdict logic.
     #
-    # Do NOT let hand-written heuristics decide the final label. They are useful
-    # for explanations, but they create false positives on real photos with
-    # WhatsApp compression, filters, smooth skin, or plain backgrounds.
-    #
-    # Final label now uses this priority:
-    # 1) Gemini/Groq vision API, if configured
-    # 2) Fine-tuned local ViT, if available
-    # 3) Primary HuggingFace AI-vs-human model, if available
-    # 4) Conservative fallback from forensic support
+    # Important: the hosted HuggingFace detector can be over-confident on real
+    # WhatsApp / compressed / filtered photos. Therefore it is NOT allowed to
+    # mark an image AI by itself. A hard AI verdict needs either Gemini/Groq
+    # vision verification, or extremely strong agreement from multiple stable
+    # forensic engines. This intentionally reduces false positives on real pics.
     total_engine_count = len(engines_dict)
 
     vision_engine = engines_dict.get("llm_vision", {})
@@ -1208,6 +1204,8 @@ def full_image_analysis(image: Image.Image) -> dict:
     primary_active = bool(primary_engine.get("active"))
     primary_ai_score = float(primary_engine.get("score", 50.0))
 
+    # Only these relatively stable engines can support a final AI verdict.
+    # No color/background/watermark votes in final decision.
     support_keys = ["clip_semantic", "texture_smoothness", "frequency", "ela_compression"]
     support_scores = []
     for key in support_keys:
@@ -1217,69 +1215,64 @@ def full_image_analysis(image: Image.Image) -> dict:
             support_scores.append(engine.get("score", 0) / max_score * 100)
 
     support_ai_score = float(np.mean(support_scores)) if support_scores else 50.0
+    very_strong_support_ai = sum(score >= 85 for score in support_scores)
     strong_support_ai = sum(score >= 75 for score in support_scores)
 
-    source = "forensic fallback"
+    decision_source = "real-first fallback"
 
+    # 1) If Gemini/Groq is configured, trust it most but still use a high AI bar.
     if vision_active:
-        # Best mode: modern multimodal model. Hard AI only when strongly AI.
-        ai_score = vision_ai_score
-        source = "vision model"
-        if ai_score >= 82.0:
+        decision_source = "vision model"
+        if vision_ai_score >= 85:
+            ai_score = vision_ai_score
             verdict       = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 55.0:
+        else:
+            # Anything below strong AI from vision is treated as authentic for
+            # portfolio stability and to stop real photos being falsely flagged.
+            ai_score = min(vision_ai_score, 35.0)
             verdict       = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
 
+    # 2) If your own fine-tuned ViT exists, use it with a strict AI threshold.
     elif ft_active:
-        # Own trained model, if present.
-        ai_score = ft_ai_score
-        source = "fine-tuned ViT"
-        if ai_score >= 82.0:
+        decision_source = "fine-tuned ViT"
+        if ft_ai_score >= 90:
+            ai_score = ft_ai_score
             verdict       = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 55.0:
+        else:
+            ai_score = min(ft_ai_score, 40.0)
             verdict       = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
 
+    # 3) Hosted default: HF model alone is not enough. Require near-certain HF
+    # plus multiple strong stable forensic signals.
     elif primary_active:
-        # Hosted free path. This model can still false-positive, so be stricter.
-        ai_score = primary_ai_score
-        source = "trained HF detector"
-        if ai_score >= 90.0 and strong_support_ai >= 1:
+        decision_source = "HF detector + forensic agreement"
+        if primary_ai_score >= 98.0 and very_strong_support_ai >= 2 and support_ai_score >= 80.0:
+            ai_score = max(primary_ai_score, support_ai_score)
             verdict       = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score >= 95.0:
-            verdict       = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 70.0:
+        else:
+            # This is the key false-positive fix: over-confident HF output on a
+            # real image no longer becomes the final app verdict.
+            ai_score = min(primary_ai_score, support_ai_score, 35.0)
             verdict       = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
 
+    # 4) Last fallback without model: require all stable support engines to be
+    # very high. Otherwise call it authentic.
     else:
-        # Last fallback: only call AI if multiple stable forensic engines are
-        # extremely high. Otherwise do not falsely accuse real images.
-        ai_score = support_ai_score
-        source = "forensic fallback"
-        if ai_score >= 85.0 and strong_support_ai >= 3:
+        decision_source = "forensic fallback"
+        if very_strong_support_ai >= 4 and support_ai_score >= 88.0:
+            ai_score = support_ai_score
             verdict       = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 75.0:
+        else:
+            ai_score = min(support_ai_score, 35.0)
             verdict       = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict       = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
 
     ai_score = float(np.clip(ai_score, 0, 100))
     ai_conf = ai_score / 100.0
@@ -1287,9 +1280,8 @@ def full_image_analysis(image: Image.Image) -> dict:
     high_risk_engine_count = 1 if verdict == "AI-GENERATED" else 0
     human_engine_count = total_engine_count - high_risk_engine_count
 
-    # Show which source made the final decision inside the primary engine text.
     if "primary_deep_detector" in engines_dict:
-        engines_dict["primary_deep_detector"]["decision_source"] = source
+        engines_dict["primary_deep_detector"]["decision_source"] = decision_source
 
     return {
         "verdict":          verdict,
