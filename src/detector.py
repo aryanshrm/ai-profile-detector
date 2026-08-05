@@ -1031,82 +1031,89 @@ def full_image_analysis(image: Image.Image) -> dict:
         },
     }
 
-    # Calibrated binary scoring for hosted demos.
+    # Stable portfolio scoring.
     #
-    # The earlier implementation averaged every engine equally. That made real
-    # false negatives likely because inactive/optional engines such as the local
-    # fine-tuned ViT and a clean watermark detector contributed 0% AI risk and
-    # pulled obvious AI images back toward AUTHENTIC.  For portfolio hosting we
-    # skip inactive optional engines, keep watermark as a weak signal only when
-    # it actually finds something, and give stronger weight to low-level image
-    # forensics that are harder for old neural classifiers to judge.
+    # The detector still runs and displays all 11 engines, but the final verdict
+    # is based only on the most useful/stable signals. Context-sensitive checks
+    # like color, plain background, portrait framing, and watermark detection are
+    # kept for explanation only because they can false-positive on real studio
+    # photos, screenshots, compressed images, beauty filters, and white walls.
     total_engine_count = len(engines_dict)
-    engine_weights = {
-        "neural_ensemble": 0.75,
-        "clip_semantic": 1.00,
+
+    final_weights = {
+        "clip_semantic": 1.15,
         "texture_smoothness": 1.45,
-        "color_forensics": 1.20,
         "frequency": 1.45,
-        "edge_sharpness": 1.10,
-        "portrait_style": 1.00,
-        "face_symmetry": 1.15,
-        "ela_compression": 1.25,
-        "fine_tuned_vit": 4.00,
-        "watermark_detection": 0.35,
+        "ela_compression": 1.10,
+        "face_symmetry": 0.65,
+        "neural_ensemble": 0.35,
     }
 
-    weighted_engine_scores = []
-    visible_engine_ai_percentages = []
+    final_engine_scores = []
+    decision_breakdown = []
 
-    for engine_key, engine in engines_dict.items():
-        if engine.get("max", 0) <= 0:
+    for engine_key, weight in final_weights.items():
+        engine = engines_dict.get(engine_key, {})
+        max_score = engine.get("max", 0)
+        if max_score <= 0:
             continue
+        ai_percentage = engine.get("score", 0) / max_score * 100
+        final_engine_scores.append((ai_percentage, weight))
+        decision_breakdown.append({
+            "engine": engine.get("name", engine_key),
+            "score": round(ai_percentage, 1),
+            "weight": weight,
+        })
 
-        ai_percentage = engine["score"] / engine["max"] * 100
-        visible_engine_ai_percentages.append(ai_percentage)
+    # Use the fine-tuned ViT heavily, but only if the checkpoint is actually
+    # present and loaded. Missing model files must not count as AUTHENTIC votes.
+    ft_engine = engines_dict.get("fine_tuned_vit", {})
+    if ft_engine.get("active") and ft_engine.get("max", 0) > 0:
+        ft_percentage = ft_engine.get("score", 0) / ft_engine.get("max", 100) * 100
+        final_engine_scores.append((ft_percentage, 4.0))
+        decision_breakdown.append({
+            "engine": ft_engine.get("name", "Fine-Tuned ViT Classifier"),
+            "score": round(ft_percentage, 1),
+            "weight": 4.0,
+        })
 
-        # Do not let missing optional engines vote as "human".
-        if engine_key == "fine_tuned_vit" and not engine.get("active"):
-            continue
+    if not final_engine_scores:
+        final_engine_scores = [(50.0, 1.0)]
 
-        # No watermark is normal and should not strongly prove authenticity.
-        if engine_key == "watermark_detection" and not engine.get("detected"):
-            continue
+    primary_percentages = [score for score, _weight in final_engine_scores]
+    strong_ai_signals = sum(score >= 70 for score in primary_percentages)
+    medium_ai_signals = sum(score >= 55 for score in primary_percentages)
+    low_ai_signals = sum(score <= 30 for score in primary_percentages)
 
-        weighted_engine_scores.append((ai_percentage, engine_weights.get(engine_key, 1.0)))
+    total_weight = sum(weight for _score, weight in final_engine_scores)
+    weighted_ai_score = sum(score * weight for score, weight in final_engine_scores) / total_weight
 
-    if not weighted_engine_scores:
-        weighted_engine_scores = [(50.0, 1.0)]
-
-    high_risk_engine_count = sum(percent >= 60 for percent in visible_engine_ai_percentages)
-    moderate_risk_engine_count = sum(percent >= 35 for percent in visible_engine_ai_percentages)
-    human_engine_count = total_engine_count - high_risk_engine_count
-
-    total_weight = sum(weight for _score, weight in weighted_engine_scores)
-    weighted_ai_score = sum(score * weight for score, weight in weighted_engine_scores) / total_weight
-
-    # Balanced consensus boost.
-    # Keep the detector useful for obvious AI images, but avoid calling real
-    # photos AI just because 1-2 heuristic engines fire on studio lighting,
-    # smooth skin, compression, or a plain background.
+    # Conservative consensus. This reduces false positives on real photos while
+    # still flagging images where several independent primary engines agree.
     ai_score = weighted_ai_score
-    if high_risk_engine_count >= 4:
+    if strong_ai_signals >= 3:
         ai_score = max(ai_score, 68.0)
-    elif high_risk_engine_count >= 3:
+    elif strong_ai_signals >= 2 and medium_ai_signals >= 3:
+        ai_score = max(ai_score, 62.0)
+    elif strong_ai_signals >= 1 and medium_ai_signals >= 4:
         ai_score = max(ai_score, 58.0)
-    elif high_risk_engine_count >= 2 and moderate_risk_engine_count >= 5:
-        ai_score = max(ai_score, 52.0)
-    elif high_risk_engine_count >= 1 and moderate_risk_engine_count >= 5:
-        ai_score = max(ai_score, 45.0)
+
+    # If most stable engines strongly say low AI risk, avoid a false AI verdict
+    # caused by one noisy engine.
+    if low_ai_signals >= 3 and strong_ai_signals <= 1:
+        ai_score = min(ai_score, 42.0)
 
     ai_score = float(np.clip(ai_score, 0, 100))
     ai_conf = ai_score / 100.0
     human_conf = 1.0 - ai_conf
 
-    # Binary verdict with a stricter AI threshold to reduce false positives.
-    # AI-GENERATED requires either a high final score or strong multi-engine
-    # agreement. Everything else is AUTHENTIC.
-    if ai_score >= 58.0 or (ai_score >= 52.0 and high_risk_engine_count >= 2) or high_risk_engine_count >= 3:
+    high_risk_engine_count = strong_ai_signals
+    human_engine_count = total_engine_count - high_risk_engine_count
+
+    # Binary output for your UI: AI-GENERATED or AUTHENTIC.
+    # Borderline cases intentionally fall back to AUTHENTIC instead of randomly
+    # flipping between labels across different photo styles.
+    if ai_score >= 64.0 or (ai_score >= 58.0 and strong_ai_signals >= 2) or strong_ai_signals >= 3:
         verdict       = "AI-GENERATED"
         verdict_label = "🚨 AI-GENERATED"
     else:
