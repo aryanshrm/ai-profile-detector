@@ -1,5 +1,5 @@
 """
-app.py — NEXUS+ AI Detector v6.0
+app.py — NEXUS+ AI Detector v6.1
 ══════════════════════════════════
 Glassmorphism Premium Dark UI for AI image forensics.
 """
@@ -7,12 +7,47 @@ Glassmorphism Premium Dark UI for AI image forensics.
 import streamlit as st
 import sys
 import os
-from PIL import Image
+from PIL import Image, ImageOps
 
 # ── Ensure detector module is importable ──
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # pyrefly: ignore [missing-import]
 from src.detector import full_image_analysis  # noqa: E402
+
+APP_VERSION = "v6.1"
+MAX_DISPLAY_DIMENSION = 1600
+MAX_UPLOAD_MB = 8
+
+
+def prepare_image(uploaded_file) -> Image.Image:
+    """Load, normalize EXIF orientation, and downscale huge uploads for cloud hosting."""
+    image_obj = ImageOps.exif_transpose(Image.open(uploaded_file)).convert("RGB")
+    if max(image_obj.size) > MAX_DISPLAY_DIMENSION:
+        image_obj.thumbnail((MAX_DISPLAY_DIMENSION, MAX_DISPLAY_DIMENSION))
+    return image_obj
+
+
+def build_report_text(result: dict) -> str:
+    """Create a clean plain-text report users can download/share."""
+    lines = [
+        "NEXUS+ AI Image Forensics Report",
+        "================================",
+        f"Verdict: {result.get('verdict', 'N/A')}",
+        f"AI probability: {result.get('confidence_score', 0):.1f}%",
+        f"Human confidence: {result.get('human_score', 0):.1f}%",
+        "",
+        "Engine breakdown:",
+    ]
+    for engine in result.get("engines", {}).values():
+        score = engine.get("score", 0)
+        max_score = engine.get("max", 100) or 100
+        pct = score / max_score * 100
+        lines.append(f"- {engine.get('name', 'Engine')}: {pct:.1f}% AI risk")
+    lines.extend([
+        "",
+        "Disclaimer: NEXUS+ is a decision-support tool. Use human review for important decisions.",
+    ])
+    return "\n".join(lines)
 
 # ──────────────────────────────────────────────
 # PAGE CONFIG
@@ -654,6 +689,140 @@ label[data-testid="stWidgetLabel"] p {
     border: none;
 }
 
+
+/* ── Portfolio polish additions ── */
+.hero-shell {
+    display:grid;
+    grid-template-columns: 1.3fr 0.7fr;
+    gap: 1.2rem;
+    align-items: stretch;
+    margin-bottom: 1.5rem;
+}
+.hero-panel {
+    background: linear-gradient(135deg, rgba(99,102,241,0.16), rgba(168,85,247,0.10), rgba(34,211,238,0.08));
+    border: 1px solid rgba(165,180,252,0.18);
+    border-radius: 26px;
+    padding: 2rem;
+    box-shadow: 0 16px 60px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.10);
+    position: relative;
+    overflow: hidden;
+}
+.hero-panel::after {
+    content:'';
+    position:absolute;
+    inset:-40% -20% auto auto;
+    width:280px;
+    height:280px;
+    background: radial-gradient(circle, rgba(34,211,238,0.20), transparent 65%);
+    pointer-events:none;
+}
+.hero-kicker {
+    display:inline-flex;
+    gap:0.5rem;
+    align-items:center;
+    font-family:'JetBrains Mono', monospace !important;
+    font-size:0.72rem;
+    letter-spacing:2px;
+    color:#a5b4fc;
+    text-transform:uppercase;
+    background:rgba(99,102,241,0.13);
+    border:1px solid rgba(99,102,241,0.28);
+    border-radius:999px;
+    padding:0.42rem 0.8rem;
+    margin-bottom:1rem;
+}
+.hero-title {
+    font-size:3.2rem;
+    line-height:1.02;
+    letter-spacing:-1.4px;
+    font-weight:800;
+    color:#fff;
+    margin:0 0 0.9rem;
+}
+.hero-title span {
+    background:linear-gradient(135deg,#a5b4fc,#e879f9,#22d3ee);
+    -webkit-background-clip:text;
+    -webkit-text-fill-color:transparent;
+}
+.hero-copy {
+    color:rgba(226,232,240,0.78);
+    font-size:1rem;
+    line-height:1.8;
+    max-width:760px;
+}
+.hero-badges { display:flex; flex-wrap:wrap; gap:0.55rem; margin-top:1.2rem; }
+.hero-badge {
+    font-family:'JetBrains Mono', monospace !important;
+    font-size:0.66rem;
+    letter-spacing:1.2px;
+    color:#c4b5fd;
+    border:1px solid rgba(196,181,253,0.20);
+    background:rgba(255,255,255,0.045);
+    border-radius:999px;
+    padding:0.45rem 0.7rem;
+}
+.hero-stat-grid { display:grid; gap:0.8rem; }
+.hero-stat {
+    background:rgba(255,255,255,0.045);
+    border:1px solid rgba(255,255,255,0.08);
+    border-radius:18px;
+    padding:1.15rem;
+}
+.hero-stat strong {
+    display:block;
+    font-family:'JetBrains Mono', monospace !important;
+    font-size:1.75rem;
+    color:#fff;
+    line-height:1;
+}
+.hero-stat span {
+    display:block;
+    margin-top:0.45rem;
+    color:rgba(148,163,184,0.85);
+    font-size:0.75rem;
+    text-transform:uppercase;
+    letter-spacing:1.4px;
+}
+.portfolio-note {
+    margin: 0 0 1.4rem;
+    padding: 0.95rem 1.1rem;
+    border-radius: 16px;
+    color: rgba(226,232,240,0.78);
+    background: rgba(14,165,233,0.07);
+    border: 1px solid rgba(14,165,233,0.16);
+    font-size: 0.86rem;
+    line-height: 1.7;
+}
+.step-list { display:grid; gap:0.7rem; }
+.step-item {
+    display:flex;
+    gap:0.8rem;
+    align-items:flex-start;
+    color:rgba(226,232,240,0.78);
+    font-size:0.86rem;
+    line-height:1.65;
+}
+.step-dot {
+    width:1.55rem; height:1.55rem;
+    border-radius:999px;
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+    flex:0 0 auto;
+    font-family:'JetBrains Mono', monospace !important;
+    font-size:0.68rem;
+    color:#fff;
+    background:linear-gradient(135deg,#6366f1,#a855f7);
+    box-shadow:0 0 20px rgba(99,102,241,0.35);
+}
+@media (max-width: 900px) {
+    .block-container { padding: 1.2rem !important; }
+    .hero-shell { grid-template-columns: 1fr; }
+    .hero-title { font-size: 2.25rem; }
+    h1 { font-size: 2.7rem !important; }
+    .metric-grid { grid-template-columns: 1fr; }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -662,14 +831,47 @@ label[data-testid="stWidgetLabel"] p {
 # HEADER
 # ──────────────────────────────────────────────
 
-st.markdown(
-    "<h1>NEXUS+ <span class='version-badge'>v6.0</span></h1>",
-    unsafe_allow_html=True,
-)
-st.markdown(
-    "<div class='subtitle'>Artificial · Intelligence · Forensics // Deep 11-Engine Inspection</div>",
-    unsafe_allow_html=True,
-)
+st.markdown(f"""
+<div class="hero-shell">
+  <div class="hero-panel">
+    <div class="hero-kicker">🔬 Portfolio-ready ML demo · {APP_VERSION}</div>
+    <div class="hero-title">NEXUS+ <span>AI Image Forensics</span></div>
+    <div class="hero-copy">
+      Upload a profile image and run an 11-engine forensic scan that combines neural classifiers,
+      CLIP semantics, frequency analysis, ELA, texture checks, face symmetry, and watermark detection.
+      Built as a polished Streamlit project ready for a live portfolio link.
+    </div>
+    <div class="hero-badges">
+      <span class="hero-badge">STREAMLIT</span>
+      <span class="hero-badge">PYTORCH</span>
+      <span class="hero-badge">OPENAI CLIP</span>
+      <span class="hero-badge">OPENCV</span>
+      <span class="hero-badge">11 ENGINES</span>
+    </div>
+  </div>
+  <div class="hero-stat-grid">
+    <div class="hero-stat"><strong>11</strong><span>Detection engines</span></div>
+    <div class="hero-stat"><strong>0–100</strong><span>AI risk score</span></div>
+    <div class="hero-stat"><strong>TXT</strong><span>Downloadable report</span></div>
+  </div>
+</div>
+<div class="portfolio-note">
+  ⚡ For best hosted performance, upload clear JPG/PNG/WEBP images under {MAX_UPLOAD_MB} MB.
+  The app automatically corrects image orientation and resizes very large uploads before analysis.
+</div>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("## NEXUS+")
+    st.caption("Portfolio demo controls")
+    st.markdown("""
+    **How to present this project:**
+    - AI image forensics dashboard
+    - 11-engine explainable scoring
+    - Streamlit + PyTorch + OpenCV
+    - Downloadable scan report
+    """)
+    st.info("Hosting tip: Streamlit Community Cloud is the easiest first deployment. Hugging Face Spaces is better if you later add large model files.")
 
 
 # ──────────────────────────────────────────────
@@ -699,8 +901,11 @@ with col_in:
     )
 
     if uploaded:
-        image = Image.open(uploaded).convert("RGB")
-        st.image(image, width="stretch")
+        file_size_mb = uploaded.size / (1024 * 1024)
+        if file_size_mb > MAX_UPLOAD_MB:
+            st.warning(f"Large upload detected ({file_size_mb:.1f} MB). It will be resized for faster hosted analysis.")
+        image = prepare_image(uploaded)
+        st.image(image, width="stretch", caption=f"Prepared image: {image.width}×{image.height}px")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -736,6 +941,17 @@ with col_in:
             <span class="engine-list-sub">{sub}</span>
         </div>""", unsafe_allow_html=True)
 
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.markdown('<div class="glass-title">How To Use</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <div class="step-list">
+      <div class="step-item"><span class="step-dot">1</span><span>Upload a JPG, PNG, JPEG, or WEBP profile image.</span></div>
+      <div class="step-item"><span class="step-dot">2</span><span>Click <b>Execute Forensic Scan</b> to run every engine.</span></div>
+      <div class="step-item"><span class="step-dot">3</span><span>Use the verdict, human/AI split, and engine explanations in your report.</span></div>
+    </div>
+    """, unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -888,6 +1104,14 @@ with col_out:
 
             st.markdown("</div>", unsafe_allow_html=True)
 
+            st.download_button(
+                "⬇️ Download forensic report",
+                data=build_report_text(result),
+                file_name="nexus_forensic_report.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
         # ══════════════════════════════════════════════
         # TAB 2: 11-ENGINE FORENSICS
         # ══════════════════════════════════════════════
@@ -936,7 +1160,7 @@ with col_out:
 # ──────────────────────────────────────────────
 
 st.markdown(
-    '<div class="footer-text">NEXUS+ <span>·</span> AI Detector v6.0 <span>·</span> '
+    '<div class="footer-text">NEXUS+ <span>·</span> AI Detector v6.1 <span>·</span> '
     '11-Engine Multi-Domain Forensics <span>·</span> '
     'HuggingFace + OpenAI CLIP + FFT</div>',
     unsafe_allow_html=True,
