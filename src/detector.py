@@ -897,6 +897,107 @@ def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str 
     }
 
 
+def engine_gemini_adjudicator(
+    image: Image.Image,
+    first_score: float,
+    support_score: float,
+    support_high_count: int,
+) -> dict:
+    """
+    Second Gemini opinion for conflict cases only.
+
+    This is the extra engine: it uses the same GEMINI_API_KEY, but it only runs
+    when the first Gemini result and local forensic support disagree. It is made
+    specifically to reduce the two common edge cases:
+      1) real celebrity/professional portraits falsely called AI
+      2) AI images incorrectly passing as authentic
+    """
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if not gemini_key:
+        return {
+            "score": 0, "max": 100, "raw": 0.0, "active": False,
+            "explanation": "Gemini adjudicator inactive because GEMINI_API_KEY is not configured.",
+        }
+
+    buffer = io.BytesIO()
+    image.save(buffer, format="JPEG", quality=88)
+    img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+    prompt = (
+        "You are the final image authenticity adjudicator. A first Gemini scan and local forensic checks disagreed or were uncertain. "
+        f"First Gemini AI probability: {first_score:.1f}%. "
+        f"Local forensic support AI score: {support_score:.1f}%. "
+        f"Number of high-risk support engines: {support_high_count}.\n"
+        "Decide carefully if the image is a real photograph or AI-generated. "
+        "Rules: A real celebrity/professional portrait, real phone photo, social-media photo, compressed WhatsApp image, smooth skin, or studio lighting must still be AUTHENTIC if anatomy, lighting, background depth, eyes, hair, and textures are plausible. "
+        "But if the image has synthetic rendering, impossible anatomy, plastic skin, broken facial details, inconsistent lighting/reflections, generated-art style, or diffusion artifacts, mark it AI. "
+        "Return ONLY valid JSON with keys: {\"is_ai\": boolean, \"ai_probability\": number between 0 and 1, \"reason\": string}. "
+        "Use below 0.35 for clearly real, above 0.75 for clearly AI, and 0.45-0.65 for genuinely mixed cases."
+    )
+
+    preferred_models = [
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-flash",
+        "gemini-2.0-flash-lite",
+        "gemini-2.0-flash",
+    ]
+    available = _list_available_gemini_models(gemini_key)
+    models_to_try = [m for m in preferred_models if (not available or m in available)]
+    if available:
+        models_to_try += [m for m in available if m not in models_to_try]
+
+    errors = []
+    for mod in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{mod}:generateContent?key={gemini_key}"
+            payload = {
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}},
+                    ],
+                }],
+                "generationConfig": {"responseMimeType": "application/json", "temperature": 0.0},
+            }
+            res = requests.post(url, json=payload, timeout=25)
+            if res.status_code != 200:
+                try:
+                    msg = res.json().get("error", {}).get("message", res.text[:180])
+                except Exception:
+                    msg = res.text[:180]
+                errors.append(f"{mod} HTTP {res.status_code}: {msg}")
+                continue
+
+            candidates = res.json().get("candidates", [])
+            if not candidates:
+                errors.append(f"{mod}: no candidates returned")
+                continue
+            text_out = candidates[0]["content"]["parts"][0]["text"]
+            data = _clean_json_from_response(text_out)
+            ai_prob = float(np.clip(float(data.get("ai_probability", 0.5)), 0.0, 1.0))
+            score_100 = round(ai_prob * 100, 1)
+            reason = data.get("reason", "Gemini adjudication completed.")
+            return {
+                "score": score_100,
+                "max": 100,
+                "raw": ai_prob,
+                "active": True,
+                "provider": f"Gemini Adjudicator ({mod})",
+                "explanation": f"<b>Gemini Adjudicator ({mod}) — {score_100}% AI:</b><br>{reason}",
+            }
+        except Exception as exc:
+            errors.append(f"{mod} exception: {exc}")
+
+    return {
+        "score": 50, "max": 100, "raw": 0.5, "active": False,
+        "explanation": "Gemini adjudicator failed: " + " | ".join(errors[:3]),
+    }
+
+
 # ═════════════════════════════════════════════════════
 # ENGINE 8 — FACE LANDMARK & FACIAL SYMMETRY FORENSICS
 # ═════════════════════════════════════════════════════
@@ -1134,49 +1235,13 @@ def engine_fine_tuned_vit(image: Image.Image) -> dict:
 
 def full_image_analysis(image: Image.Image) -> dict:
     """
-    Clean Gemini-first analysis.
-
-    This version removes noisy/space-filling engines from the visible result.
-    Final verdict is not allowed to be controlled by unreliable public HF
-    classifiers, watermark absence, missing ViT files, or white-background rules.
+    Gemini-first analysis with one extra conflict-resolution engine.
     """
     vision  = engine_llm_vision(image)
     clip    = engine_clip_semantic(image)
     texture = engine_texture_smoothness(image)
     freq    = engine_frequency(image)
     ela     = engine_ela_compression(image)
-
-    engines_dict = {
-        "gemini_vision": {
-            "name": "Gemini Vision Verification",
-            "icon": "👁️",
-            **vision,
-        },
-        "clip_semantic": {
-            "name": "CLIP Semantic Analysis",
-            "icon": "🔬",
-            **clip,
-        },
-        "texture_smoothness": {
-            "name": "Texture Smoothness Analysis",
-            "icon": "🎨",
-            **texture,
-        },
-        "frequency": {
-            "name": "Frequency Domain (FFT)",
-            "icon": "📊",
-            **freq,
-        },
-        "ela_compression": {
-            "name": "Error Level Analysis (ELA)",
-            "icon": "🖼️",
-            **ela,
-        },
-    }
-
-    total_engine_count = len(engines_dict)
-    vision_active = bool(vision.get("active"))
-    vision_score = float(vision.get("score", 0.0))
 
     support_scores = [
         float(clip.get("score", 50.0)),
@@ -1187,52 +1252,76 @@ def full_image_analysis(image: Image.Image) -> dict:
     support_score = float(np.mean(support_scores))
     support_high_count = sum(score >= 75 for score in support_scores)
 
+    engines_dict = {
+        "gemini_vision": {"name": "Gemini Vision Verification", "icon": "👁️", **vision},
+        "clip_semantic": {"name": "CLIP Semantic Analysis", "icon": "🔬", **clip},
+        "texture_smoothness": {"name": "Texture Smoothness Analysis", "icon": "🎨", **texture},
+        "frequency": {"name": "Frequency Domain (FFT)", "icon": "📊", **freq},
+        "ela_compression": {"name": "Error Level Analysis (ELA)", "icon": "🖼️", **ela},
+    }
+
+    vision_active = bool(vision.get("active"))
+    vision_score = float(vision.get("score", 0.0))
+
+    # One extra engine: only run a second Gemini adjudication when the image is a
+    # conflict/edge case. This avoids wasting quota on easy images.
+    needs_adjudication = False
     if vision_active:
-        # Gemini is the main reviewer, but not the only signal. This fixes the
-        # current false-negative case where Gemini calls some AI images real.
-        # Real photos stay protected because a hard AI verdict needs either a
-        # high Gemini score or strong agreement from multiple stable forensic
-        # engines. One noisy engine, such as texture alone, is not enough.
-        if vision_score >= 78.0:
-            ai_score = vision_score
+        needs_adjudication = (
+            (25.0 < vision_score < 75.0)
+            or (vision_score < 58.0 and (support_high_count >= 2 or support_score >= 58.0))
+            or (vision_score >= 58.0 and support_score <= 35.0)
+        )
+
+    adjudicator = None
+    if needs_adjudication:
+        adjudicator = engine_gemini_adjudicator(image, vision_score, support_score, support_high_count)
+        if adjudicator.get("active"):
+            engines_dict = {
+                "gemini_vision": engines_dict["gemini_vision"],
+                "gemini_adjudicator": {"name": "Gemini Adjudicator", "icon": "⚖️", **adjudicator},
+                "clip_semantic": engines_dict["clip_semantic"],
+                "texture_smoothness": engines_dict["texture_smoothness"],
+                "frequency": engines_dict["frequency"],
+                "ela_compression": engines_dict["ela_compression"],
+            }
+
+    # Final verdict.
+    # Easy cases: trust primary Gemini.
+    # Edge cases: trust the adjudicator. If still mixed, say REVIEW NEEDED.
+    if adjudicator and adjudicator.get("active"):
+        ai_score = float(adjudicator.get("score", 50.0))
+        if ai_score >= 72.0:
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif vision_score >= 62.0 and support_high_count >= 2:
-            ai_score = max(vision_score, support_score)
-            verdict = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 3 and support_score >= 76.0 and vision_score >= 35.0:
-            ai_score = max(vision_score, support_score)
-            verdict = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 2 and support_score >= 68.0:
-            ai_score = max(55.0, min(max(vision_score, support_score), 72.0))
-            verdict = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-        elif vision_score <= 35.0 and support_high_count <= 2:
-            # Strong Gemini-real result should protect real celebrity/professional portraits.
-            ai_score = vision_score
-            verdict = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        elif vision_score <= 58.0 and support_high_count <= 1:
-            ai_score = min(vision_score, 45.0)
+        elif ai_score <= 42.0:
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
         else:
-            ai_score = max(vision_score, min(support_score, 65.0))
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
+    elif vision_active:
+        ai_score = vision_score
+        if ai_score >= 78.0:
+            verdict = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 58.0:
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        else:
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
     else:
-        # No Gemini quota/key = no fake confidence. Local forensics are shown as
-        # hints only. This prevents wrong AI labels on real actor/profile photos.
-        if support_score <= 45.0:
-            ai_score = max(15.0, support_score)
-            verdict = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        elif support_score >= 88.0 and support_high_count >= 4:
+        # If Gemini is unavailable, local engines are hints only. Avoid hard
+        # false labels unless every support engine strongly agrees.
+        if support_score >= 88.0 and support_high_count >= 4:
             ai_score = support_score
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
+        elif support_score <= 45.0:
+            ai_score = max(15.0, support_score)
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
         else:
             ai_score = min(max(support_score, 40.0), 60.0)
             verdict = "UNCERTAIN"
@@ -1240,6 +1329,7 @@ def full_image_analysis(image: Image.Image) -> dict:
 
     ai_score = float(np.clip(ai_score, 0, 100))
     human_score = 100.0 - ai_score
+    total_engine_count = len(engines_dict)
     high_risk_engine_count = sum(
         (engine.get("score", 0) / (engine.get("max", 100) or 100) * 100) >= 75
         for engine in engines_dict.values()
