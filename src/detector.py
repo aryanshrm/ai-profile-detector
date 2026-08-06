@@ -803,8 +803,9 @@ def engine_llm_vision(image: Image.Image, gemini_key: str = None, groq_key: str 
 
     prompt = (
         "You are a careful image authenticity reviewer. Decide whether the uploaded image is most likely a real/authentic photograph or AI-generated. "
-        "Be conservative: real celebrity photos, professional portraits, filtered selfies, compressed WhatsApp images, smooth skin, and studio lighting should NOT be called AI unless there are clear synthetic artifacts. "
-        "Look for impossible geometry, distorted facial features, inconsistent eyes/teeth/hair/hands, unnatural texture, and diffusion artifacts. "
+        "Be careful and balanced: real celebrity photos, professional portraits, filtered selfies, compressed WhatsApp images, smooth skin, and studio lighting should NOT be called AI by themselves. "
+        "However, if the image is a synthetic render, diffusion portrait, generated artwork, or has clear AI artifacts, mark it AI even if it looks realistic. "
+        "Look for impossible geometry, distorted facial features, inconsistent eyes/teeth/hair/hands, unnatural texture, repeated patterns, plastic skin, and diffusion artifacts. "
         "Return ONLY valid JSON with keys: "
         '{"is_ai": boolean, "ai_probability": number between 0 and 1, "reason": string}. '
         "Use ai_probability below 0.40 for likely real photos, above 0.75 only for clear AI generation."
@@ -1187,16 +1188,37 @@ def full_image_analysis(image: Image.Image) -> dict:
     support_high_count = sum(score >= 75 for score in support_scores)
 
     if vision_active:
-        # Gemini is the only hard decision-maker. It is also prompted to be
-        # conservative with real celebrity/professional/WhatsApp photos.
-        ai_score = vision_score
-        if ai_score >= 78.0:
+        # Gemini is the main reviewer, but not the only signal. This fixes the
+        # current false-negative case where Gemini calls some AI images real.
+        # Real photos stay protected because a hard AI verdict needs either a
+        # high Gemini score or strong agreement from multiple stable forensic
+        # engines. One noisy engine, such as texture alone, is not enough.
+        if vision_score >= 78.0:
+            ai_score = vision_score
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 58.0:
+        elif vision_score >= 60.0 and support_high_count >= 1:
+            ai_score = max(vision_score, support_score)
+            verdict = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif support_high_count >= 3 and support_score >= 72.0:
+            ai_score = max(vision_score, support_score)
+            verdict = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+        elif support_high_count >= 2 and support_score >= 65.0:
+            ai_score = max(55.0, min(max(vision_score, support_score), 72.0))
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
+        elif vision_score <= 40.0 and support_high_count <= 1:
+            ai_score = vision_score
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        elif vision_score <= 58.0 and support_high_count <= 1:
+            ai_score = min(vision_score, 45.0)
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
         else:
+            ai_score = max(vision_score, min(support_score, 65.0))
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
     else:
