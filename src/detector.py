@@ -1133,38 +1133,23 @@ def engine_fine_tuned_vit(image: Image.Image) -> dict:
 
 def full_image_analysis(image: Image.Image) -> dict:
     """
-    Run 10 local forensic & neural engines and produce a final weighted verdict
-    calibrated for modern AI diffusion models.
+    Clean Gemini-first analysis.
+
+    This version removes noisy/space-filling engines from the visible result.
+    Final verdict is not allowed to be controlled by unreliable public HF
+    classifiers, watermark absence, missing ViT files, or white-background rules.
     """
-    vision   = engine_llm_vision(image)
-    primary  = engine_primary_deep_detector(image)
-    neural   = engine_neural_ensemble(image)
-    clip     = engine_clip_semantic(image)
-    texture  = engine_texture_smoothness(image)
-    color    = engine_color_forensics(image)
-    freq     = engine_frequency(image)
-    edge     = engine_edge_sharpness(image)
-    portrait = engine_portrait_style(image)
-    face     = engine_face_symmetry(image)
-    ela      = engine_ela_compression(image)
-    watermark = engine_watermark_detection(image)
-    ft_vit   = engine_fine_tuned_vit(image)
+    vision  = engine_llm_vision(image)
+    clip    = engine_clip_semantic(image)
+    texture = engine_texture_smoothness(image)
+    freq    = engine_frequency(image)
+    ela     = engine_ela_compression(image)
 
     engines_dict = {
-        "llm_vision": {
+        "gemini_vision": {
             "name": "Gemini Vision Verification",
             "icon": "👁️",
             **vision,
-        },
-        "primary_deep_detector": {
-            "name": "Primary AI-vs-Human Detector",
-            "icon": "🎯",
-            **primary,
-        },
-        "neural_ensemble": {
-            "name": "Neural Network Ensemble",
-            "icon": "🧠",
-            **neural,
         },
         "clip_semantic": {
             "name": "CLIP Semantic Analysis",
@@ -1176,157 +1161,77 @@ def full_image_analysis(image: Image.Image) -> dict:
             "icon": "🎨",
             **texture,
         },
-        "color_forensics": {
-            "name": "Color & Saturation Forensics",
-            "icon": "🌈",
-            **color,
-        },
         "frequency": {
             "name": "Frequency Domain (FFT)",
             "icon": "📊",
             **freq,
-        },
-        "edge_sharpness": {
-            "name": "Background & Edge Analysis",
-            "icon": "🔍",
-            **edge,
-        },
-        "portrait_style": {
-            "name": "Portrait Style Analysis",
-            "icon": "🪞",
-            **portrait,
-        },
-        "face_symmetry": {
-            "name": "Face Symmetry & Micro-Texture",
-            "icon": "👤",
-            **face,
         },
         "ela_compression": {
             "name": "Error Level Analysis (ELA)",
             "icon": "🖼️",
             **ela,
         },
-        "fine_tuned_vit": {
-            "name": "Fine-Tuned ViT Classifier",
-            "icon": "⚡",
-            **ft_vit,
-        },
-        "watermark_detection": {
-            "name": "Watermark Detection",
-            "icon": "🏷️",
-            **watermark,
-        },
     }
 
-    # Real-first final verdict logic.
-    #
-    # Important: the hosted HuggingFace detector can be over-confident on real
-    # WhatsApp / compressed / filtered photos. Therefore it is NOT allowed to
-    # mark an image AI by itself. A hard AI verdict needs either Gemini
-    # vision verification, or extremely strong agreement from multiple stable
-    # forensic engines. This intentionally reduces false positives on real pics.
     total_engine_count = len(engines_dict)
+    vision_active = bool(vision.get("active"))
+    vision_score = float(vision.get("score", 0.0))
 
-    vision_engine = engines_dict.get("llm_vision", {})
-    vision_active = bool(vision_engine.get("active")) and "failed" not in str(vision_engine.get("explanation", "")).lower()
-    vision_ai_score = float(vision_engine.get("score", 50.0))
+    support_scores = [
+        float(clip.get("score", 50.0)),
+        float(texture.get("score", 50.0)),
+        float(freq.get("score", 50.0)),
+        float(ela.get("score", 50.0)),
+    ]
+    support_score = float(np.mean(support_scores))
+    support_high_count = sum(score >= 75 for score in support_scores)
 
-    ft_engine = engines_dict.get("fine_tuned_vit", {})
-    ft_active = bool(ft_engine.get("active"))
-    ft_ai_score = float(ft_engine.get("score", 50.0))
-
-    primary_engine = engines_dict.get("primary_deep_detector", {})
-    primary_active = bool(primary_engine.get("active"))
-    primary_ai_score = float(primary_engine.get("score", 50.0))
-
-    # Only these relatively stable engines can support a final AI verdict.
-    # No color/background/watermark votes in final decision.
-    support_keys = ["clip_semantic", "texture_smoothness", "frequency", "ela_compression"]
-    support_scores = []
-    for key in support_keys:
-        engine = engines_dict.get(key, {})
-        max_score = engine.get("max", 0)
-        if max_score > 0:
-            support_scores.append(engine.get("score", 0) / max_score * 100)
-
-    support_ai_score = float(np.mean(support_scores)) if support_scores else 50.0
-    very_strong_support_ai = sum(score >= 85 for score in support_scores)
-    strong_support_ai = sum(score >= 75 for score in support_scores)
-
-    decision_source = "real-first fallback"
-
-    # 1) If Gemini is configured, trust it most but still use a high AI bar.
     if vision_active:
-        decision_source = "vision model"
-        if vision_ai_score >= 85:
-            ai_score = vision_ai_score
-            verdict       = "AI-GENERATED"
+        # Gemini is the only hard decision-maker. It is also prompted to be
+        # conservative with real celebrity/professional/WhatsApp photos.
+        ai_score = vision_score
+        if ai_score >= 78.0:
+            verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        else:
-            # Anything below strong AI from vision is treated as authentic for
-            # portfolio stability and to stop real photos being falsely flagged.
-            ai_score = min(vision_ai_score, 35.0)
-            verdict       = "AUTHENTIC"
+        elif ai_score <= 58.0:
+            verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-
-    # 2) If your own fine-tuned ViT exists, use it with a strict AI threshold.
-    elif ft_active:
-        decision_source = "fine-tuned ViT"
-        if ft_ai_score >= 90:
-            ai_score = ft_ai_score
-            verdict       = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
         else:
-            ai_score = min(ft_ai_score, 40.0)
-            verdict       = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-
-    # 3) Hosted default: HF model alone is not enough. Require near-certain HF
-    # plus multiple strong stable forensic signals.
-    elif primary_active:
-        decision_source = "HF detector + forensic agreement"
-        if primary_ai_score >= 98.0 and very_strong_support_ai >= 2 and support_ai_score >= 80.0:
-            ai_score = max(primary_ai_score, support_ai_score)
-            verdict       = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        else:
-            # This is the key false-positive fix: over-confident HF output on a
-            # real image no longer becomes the final app verdict.
-            ai_score = min(primary_ai_score, support_ai_score, 35.0)
-            verdict       = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-
-    # 4) Last fallback without model: require all stable support engines to be
-    # very high. Otherwise call it authentic.
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
     else:
-        decision_source = "forensic fallback"
-        if very_strong_support_ai >= 4 and support_ai_score >= 88.0:
-            ai_score = support_ai_score
-            verdict       = "AI-GENERATED"
+        # No Gemini quota/key = no fake confidence. Local forensics are shown as
+        # hints only. This prevents wrong AI labels on real actor/profile photos.
+        if support_score <= 45.0:
+            ai_score = max(15.0, support_score)
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
+        elif support_score >= 88.0 and support_high_count >= 4:
+            ai_score = support_score
+            verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
         else:
-            ai_score = min(support_ai_score, 35.0)
-            verdict       = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
+            ai_score = min(max(support_score, 40.0), 60.0)
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
 
     ai_score = float(np.clip(ai_score, 0, 100))
-    ai_conf = ai_score / 100.0
-    human_conf = 1.0 - ai_conf
-    high_risk_engine_count = 1 if verdict == "AI-GENERATED" else 0
+    human_score = 100.0 - ai_score
+    high_risk_engine_count = sum(
+        (engine.get("score", 0) / (engine.get("max", 100) or 100) * 100) >= 75
+        for engine in engines_dict.values()
+    )
     human_engine_count = total_engine_count - high_risk_engine_count
 
-    if "primary_deep_detector" in engines_dict:
-        engines_dict["primary_deep_detector"]["decision_source"] = decision_source
-
     return {
-        "verdict":          verdict,
-        "verdict_label":    verdict_label,
-        "confidence_score": round(ai_conf * 100, 1),   # Average AI risk across engines
-        "human_score":      round(human_conf * 100, 1), # Average Human confidence across engines
+        "verdict": verdict,
+        "verdict_label": verdict_label,
+        "confidence_score": round(ai_score, 1),
+        "human_score": round(human_score, 1),
         "total_engine_count": total_engine_count,
         "high_risk_engine_count": high_risk_engine_count,
-        "human_engine_count":     human_engine_count,
-        "engines":          engines_dict,
+        "human_engine_count": human_engine_count,
+        "engines": engines_dict,
     }
 
 
