@@ -1188,38 +1188,38 @@ def full_image_analysis(image: Image.Image) -> dict:
     support_high_count = sum(score >= 75 for score in support_scores)
 
     if vision_active:
-        # Gemini is the main reviewer, but not the only signal. This fixes the
-        # current false-negative case where Gemini calls some AI images real.
-        # Real photos stay protected because a hard AI verdict needs either a
-        # high Gemini score or strong agreement from multiple stable forensic
-        # engines. One noisy engine, such as texture alone, is not enough.
-        if vision_score >= 78.0:
+        # Final balanced policy:
+        # - Protect strong Gemini-real results so real portraits/celebrity photos
+        #   do not get falsely labelled AI because of smooth skin/compression.
+        # - Never call a suspicious AI image AUTHENTIC just because Gemini is
+        #   unsure. Conflicts become REVIEW NEEDED instead of a wrong hard label.
+        # - Hard AI needs Gemini confidence or clear Gemini+forensics agreement.
+        if vision_score >= 75.0:
             ai_score = vision_score
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif vision_score >= 62.0 and support_high_count >= 2:
+        elif vision_score >= 58.0 and support_high_count >= 2:
             ai_score = max(vision_score, support_score)
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 3 and support_score >= 76.0 and vision_score >= 35.0:
-            ai_score = max(vision_score, support_score)
-            verdict = "AI-GENERATED"
-            verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 2 and support_score >= 68.0:
-            ai_score = max(55.0, min(max(vision_score, support_score), 72.0))
-            verdict = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-        elif vision_score <= 35.0 and support_high_count <= 2:
-            # Strong Gemini-real result should protect real celebrity/professional portraits.
+        elif vision_score <= 25.0:
+            # Very strong Gemini-real verdict. This protects the Henry Cavill /
+            # real professional portrait edge case.
             ai_score = vision_score
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        elif vision_score <= 58.0 and support_high_count <= 1:
-            ai_score = min(vision_score, 45.0)
+        elif support_high_count >= 2 or support_score >= 58.0:
+            # Gemini is leaning real/unclear, but forensic support is suspicious.
+            # Do not incorrectly say AUTHENTIC; ask for review.
+            ai_score = max(45.0, min(max(vision_score, support_score), 68.0))
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
+        elif vision_score <= 52.0:
+            ai_score = min(vision_score, 42.0)
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
         else:
-            ai_score = max(vision_score, min(support_score, 65.0))
+            ai_score = max(vision_score, min(support_score, 62.0))
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
     else:
