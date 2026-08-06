@@ -1197,19 +1197,20 @@ def full_image_analysis(image: Image.Image) -> dict:
             ai_score = vision_score
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif vision_score >= 60.0 and support_high_count >= 1:
+        elif vision_score >= 62.0 and support_high_count >= 2:
             ai_score = max(vision_score, support_score)
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 3 and support_score >= 72.0:
+        elif support_high_count >= 3 and support_score >= 76.0 and vision_score >= 35.0:
             ai_score = max(vision_score, support_score)
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif support_high_count >= 2 and support_score >= 65.0:
+        elif support_high_count >= 2 and support_score >= 68.0:
             ai_score = max(55.0, min(max(vision_score, support_score), 72.0))
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
-        elif vision_score <= 40.0 and support_high_count <= 1:
+        elif vision_score <= 35.0 and support_high_count <= 2:
+            # Strong Gemini-real result should protect real celebrity/professional portraits.
             ai_score = vision_score
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
