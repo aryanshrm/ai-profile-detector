@@ -1251,6 +1251,7 @@ def full_image_analysis(image: Image.Image) -> dict:
     ]
     support_score = float(np.mean(support_scores))
     support_high_count = sum(score >= 75 for score in support_scores)
+    support_suspicious = support_high_count >= 2 or support_score >= 58.0
 
     engines_dict = {
         "gemini_vision": {"name": "Gemini Vision Verification", "icon": "👁️", **vision},
@@ -1269,7 +1270,7 @@ def full_image_analysis(image: Image.Image) -> dict:
     if vision_active:
         needs_adjudication = (
             (25.0 < vision_score < 75.0)
-            or (vision_score < 58.0 and (support_high_count >= 2 or support_score >= 58.0))
+            or (vision_score < 58.0 and support_suspicious)
             or (vision_score >= 58.0 and support_score <= 35.0)
         )
 
@@ -1294,6 +1295,13 @@ def full_image_analysis(image: Image.Image) -> dict:
         if ai_score >= 72.0:
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
+        elif support_suspicious:
+            # Critical guard: if the support engines are suspicious, the second
+            # Gemini opinion is NOT allowed to turn an edge-case AI image into a
+            # clean AUTHENTIC. It must be REVIEW NEEDED unless it is clearly AI.
+            ai_score = max(45.0, min(max(ai_score, support_score), 65.0))
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
         elif ai_score <= 42.0:
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
@@ -1305,6 +1313,13 @@ def full_image_analysis(image: Image.Image) -> dict:
         if ai_score >= 78.0:
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
+        elif support_suspicious:
+            # Do not give a clean AUTHENTIC label when Gemini is low/medium but
+            # multiple stable forensic engines disagree. This prevents AI images
+            # from passing as authentic.
+            ai_score = max(45.0, min(max(ai_score, support_score), 65.0))
+            verdict = "UNCERTAIN"
+            verdict_label = "⚠️ REVIEW NEEDED"
         elif ai_score <= 58.0:
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
