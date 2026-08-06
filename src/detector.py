@@ -1295,10 +1295,19 @@ def full_image_analysis(image: Image.Image) -> dict:
         if ai_score >= 72.0:
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 35.0 and vision_score <= 35.0:
+            # General strong-real agreement rule: when two independent Gemini
+            # passes both strongly favor a real photograph, do not let noisy
+            # texture/compression heuristics downgrade it to REVIEW NEEDED.
+            # This applies to real celebrity portraits, professional photos,
+            # phone photos, and compressed social-media images.
+            ai_score = min(ai_score, vision_score)
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
         elif support_suspicious:
             # Critical guard: if the support engines are suspicious, the second
             # Gemini opinion is NOT allowed to turn an edge-case AI image into a
-            # clean AUTHENTIC. It must be REVIEW NEEDED unless it is clearly AI.
+            # clean AUTHENTIC unless both Gemini passes are extremely real.
             ai_score = max(45.0, min(max(ai_score, support_score), 65.0))
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
@@ -1313,6 +1322,10 @@ def full_image_analysis(image: Image.Image) -> dict:
         if ai_score >= 78.0:
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
+        elif ai_score <= 25.0:
+            # General strong-real Gemini result.
+            verdict = "AUTHENTIC"
+            verdict_label = "✅ AUTHENTIC"
         elif support_suspicious:
             # Do not give a clean AUTHENTIC label when Gemini is low/medium but
             # multiple stable forensic engines disagree. This prevents AI images
