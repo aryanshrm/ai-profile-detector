@@ -1235,7 +1235,10 @@ def engine_fine_tuned_vit(image: Image.Image) -> dict:
 
 def full_image_analysis(image: Image.Image) -> dict:
     """
-    Gemini-first analysis with one extra conflict-resolution engine.
+    Final conservative Gemini-first analysis.
+
+    Priority: never give a clean AUTHENTIC label to a suspicious AI image.
+    If Gemini and forensic support disagree, the result is REVIEW NEEDED.
     """
     vision  = engine_llm_vision(image)
     clip    = engine_clip_semantic(image)
@@ -1251,7 +1254,7 @@ def full_image_analysis(image: Image.Image) -> dict:
     ]
     support_score = float(np.mean(support_scores))
     support_high_count = sum(score >= 75 for score in support_scores)
-    support_suspicious = support_high_count >= 2 or support_score >= 58.0
+    support_suspicious = support_high_count >= 2 or support_score >= 55.0
 
     engines_dict = {
         "gemini_vision": {"name": "Gemini Vision Verification", "icon": "👁️", **vision},
@@ -1262,20 +1265,11 @@ def full_image_analysis(image: Image.Image) -> dict:
     }
 
     vision_active = bool(vision.get("active"))
-    vision_score = float(vision.get("score", 0.0))
+    vision_score = float(vision.get("score", 50.0 if not vision_active else 0.0))
 
-    # One extra engine: only run a second Gemini adjudication when the image is a
-    # conflict/edge case. This avoids wasting quota on easy images.
-    needs_adjudication = False
-    if vision_active:
-        needs_adjudication = (
-            (25.0 < vision_score < 75.0)
-            or (vision_score < 58.0 and support_suspicious)
-            or (vision_score >= 58.0 and support_score <= 35.0)
-        )
-
+    # Run the extra Gemini adjudicator only on genuinely difficult cases.
     adjudicator = None
-    if needs_adjudication:
+    if vision_active and (25.0 < vision_score < 78.0 or support_suspicious):
         adjudicator = engine_gemini_adjudicator(image, vision_score, support_score, support_high_count)
         if adjudicator.get("active"):
             engines_dict = {
@@ -1287,71 +1281,60 @@ def full_image_analysis(image: Image.Image) -> dict:
                 "ela_compression": engines_dict["ela_compression"],
             }
 
-    # Final verdict.
-    # Easy cases: trust primary Gemini.
-    # Edge cases: trust the adjudicator. If still mixed, say REVIEW NEEDED.
+    gemini_scores = []
+    if vision_active:
+        gemini_scores.append(vision_score)
     if adjudicator and adjudicator.get("active"):
-        ai_score = float(adjudicator.get("score", 50.0))
-        if ai_score >= 72.0:
+        gemini_scores.append(float(adjudicator.get("score", 50.0)))
+
+    if gemini_scores:
+        gemini_max = max(gemini_scores)
+        gemini_min = min(gemini_scores)
+        gemini_avg = float(np.mean(gemini_scores))
+
+        # Hard AI: Gemini is confident, or Gemini is medium and support agrees.
+        if gemini_max >= 75.0:
+            ai_score = gemini_max
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 35.0 and vision_score <= 35.0:
-            # General strong-real agreement rule: when two independent Gemini
-            # passes both strongly favor a real photograph, do not let noisy
-            # texture/compression heuristics downgrade it to REVIEW NEEDED.
-            # This applies to real celebrity portraits, professional photos,
-            # phone photos, and compressed social-media images.
-            ai_score = min(ai_score, vision_score)
-            verdict = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        elif support_suspicious:
-            # Critical guard: if the support engines are suspicious, the second
-            # Gemini opinion is NOT allowed to turn an edge-case AI image into a
-            # clean AUTHENTIC unless both Gemini passes are extremely real.
-            ai_score = max(45.0, min(max(ai_score, support_score), 65.0))
-            verdict = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-        elif ai_score <= 42.0:
-            verdict = "AUTHENTIC"
-            verdict_label = "✅ AUTHENTIC"
-        else:
-            verdict = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-    elif vision_active:
-        ai_score = vision_score
-        if ai_score >= 78.0:
+        elif gemini_max >= 58.0 and support_suspicious:
+            ai_score = max(gemini_avg, support_score, 65.0)
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif ai_score <= 25.0:
-            # General strong-real Gemini result.
+        elif support_high_count >= 3 and support_score >= 72.0 and gemini_max >= 40.0:
+            ai_score = max(support_score, 68.0)
+            verdict = "AI-GENERATED"
+            verdict_label = "🚨 AI-GENERATED"
+
+        # Clean AUTHENTIC only when Gemini is strongly real AND support is not suspicious.
+        # This is the key rule that prevents AI images from passing as real.
+        elif gemini_max <= 35.0 and support_score <= 50.0 and support_high_count == 0:
+            ai_score = min(gemini_min, support_score)
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
-        elif support_suspicious:
-            # Do not give a clean AUTHENTIC label when Gemini is low/medium but
-            # multiple stable forensic engines disagree. This prevents AI images
-            # from passing as authentic.
-            ai_score = max(45.0, min(max(ai_score, support_score), 65.0))
-            verdict = "UNCERTAIN"
-            verdict_label = "⚠️ REVIEW NEEDED"
-        elif ai_score <= 58.0:
+        elif gemini_max <= 45.0 and support_score <= 45.0 and support_high_count == 0:
+            ai_score = min(gemini_avg, 35.0)
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
+
+        # Any disagreement or suspicious support becomes review, not AUTHENTIC.
         else:
+            ai_score = max(45.0, min(max(gemini_avg, support_score), 68.0))
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
     else:
-        # If Gemini is unavailable, local engines are hints only. Avoid hard
-        # false labels unless every support engine strongly agrees.
+        # Gemini unavailable: local engines are only hints. Avoid clean labels
+        # unless support is very clear.
         if support_score >= 88.0 and support_high_count >= 4:
             ai_score = support_score
             verdict = "AI-GENERATED"
             verdict_label = "🚨 AI-GENERATED"
-        elif support_score <= 45.0:
+        elif support_score <= 40.0 and support_high_count == 0:
             ai_score = max(15.0, support_score)
             verdict = "AUTHENTIC"
             verdict_label = "✅ AUTHENTIC"
         else:
-            ai_score = min(max(support_score, 40.0), 60.0)
+            ai_score = min(max(support_score, 45.0), 65.0)
             verdict = "UNCERTAIN"
             verdict_label = "⚠️ REVIEW NEEDED"
 
